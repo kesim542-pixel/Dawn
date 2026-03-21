@@ -2,3 +2,7 @@ python-telegram-bot[job-queue]>=20.0
 telethon
 yt-dlp
 python-dotenv
+fastapi
+uvicorn
+httpx
+aiofiles
