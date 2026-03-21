@@ -1,6 +1,8 @@
 import os
 import re
 import asyncio
+import urllib.request
+import random
 import yt_dlp
 from telethon import TelegramClient
 from telethon.tl.functions.messages import ImportChatInviteRequest
@@ -16,23 +18,75 @@ def is_yt_dlp_link(link: str) -> bool:
     return any(d in link for d in YT_DLP_DOMAINS)
 
 
-# ── yt-dlp download with live progress ───────────────────────────────────
+# ── Free proxy fetcher ────────────────────────────────────────────────────
 
-def download_with_ytdlp(link: str, out: str = "video.mp4",
-                        progress_cb=None) -> str:
+def fetch_free_proxies() -> list:
     """
-    progress_cb(percent, speed_bps, downloaded, total) called every chunk.
-    Runs sync — call via run_in_executor from async code.
+    Fetch free proxy list from public APIs.
+    Returns list of proxy strings like ['socks5://1.2.3.4:1080', ...]
+    Falls back to empty list if all sources fail.
     """
+    proxies = []
 
+    # Source 1: proxifly API (free, no key needed)
+    try:
+        url = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            lines = r.read().decode().strip().splitlines()
+            for line in lines[:80]:   # take top 80
+                line = line.strip()
+                if line:
+                    proxies.append(f"socks5://{line}")
+    except Exception:
+        pass
+
+    # Source 2: plain socks5 list fallback
+    if not proxies:
+        try:
+            url = "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=6) as r:
+                lines = r.read().decode().strip().splitlines()
+                for line in lines[:80]:
+                    line = line.strip()
+                    if line:
+                        proxies.append(f"socks5://{line}")
+        except Exception:
+            pass
+
+    # Source 3: http proxies last resort
+    if not proxies:
+        try:
+            url = "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=6) as r:
+                lines = r.read().decode().strip().splitlines()
+                for line in lines[:80]:
+                    line = line.strip()
+                    if line:
+                        proxies.append(f"http://{line}")
+        except Exception:
+            pass
+
+    random.shuffle(proxies)   # randomize so we don't always hit same ones
+    return proxies
+
+
+def try_download_with_proxy(link: str, out: str, proxy: str,
+                            progress_cb=None) -> bool:
+    """
+    Try to download using a single proxy.
+    Returns True on success, False on failure.
+    """
     def _hook(d):
         if progress_cb is None:
             return
         if d["status"] == "downloading":
-            total     = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-            dled      = d.get("downloaded_bytes", 0)
-            speed     = d.get("speed") or 0
-            percent   = (dled / total * 100) if total > 0 else 0
+            total   = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            dled    = d.get("downloaded_bytes", 0)
+            speed   = d.get("speed") or 0
+            percent = (dled / total * 100) if total > 0 else 0
             progress_cb(percent, speed, dled, total)
 
     ydl_opts = {
@@ -40,6 +94,8 @@ def download_with_ytdlp(link: str, out: str = "video.mp4",
         "format"             : "mp4/bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
         "progress_hooks"     : [_hook],
+        "proxy"              : proxy,
+        "socket_timeout"     : 15,
         "http_headers"       : {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -47,12 +103,115 @@ def download_with_ytdlp(link: str, out: str = "video.mp4",
                 "Chrome/120.0.0.0 Safari/537.36"
             )
         },
-        "retries"         : 5,
-        "fragment_retries": 5,
+        "retries"         : 2,
+        "fragment_retries": 2,
+        "quiet"           : True,
+        "no_warnings"     : True,
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([link])
-    return out
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([link])
+        # check file actually exists and has content
+        if os.path.exists(out) and os.path.getsize(out) > 10_000:
+            return True
+    except Exception:
+        pass
+
+    # clean up partial file before next attempt
+    if os.path.exists(out):
+        os.remove(out)
+    return False
+
+
+def download_with_ytdlp(link: str, out: str = "video.mp4",
+                        progress_cb=None) -> str:
+    """
+    Download with yt-dlp.
+    For YouTube: auto-fetches free proxies and tries them one by one.
+    For other sites: direct download (no proxy needed).
+    """
+
+    is_youtube = "youtube.com" in link or "youtu.be" in link
+
+    # ── Non-YouTube: direct download ──────────────────────────────────────
+    if not is_youtube:
+        def _hook(d):
+            if progress_cb is None:
+                return
+            if d["status"] == "downloading":
+                total   = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                dled    = d.get("downloaded_bytes", 0)
+                speed   = d.get("speed") or 0
+                percent = (dled / total * 100) if total > 0 else 0
+                progress_cb(percent, speed, dled, total)
+
+        ydl_opts = {
+            "outtmpl"            : out,
+            "format"             : "mp4/bestvideo+bestaudio/best",
+            "merge_output_format": "mp4",
+            "progress_hooks"     : [_hook],
+            "http_headers"       : {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
+            },
+            "retries"         : 5,
+            "fragment_retries": 5,
+        }
+
+        # Also check if user set a manual PROXY_URL env var
+        manual_proxy = os.getenv("PROXY_URL")
+        if manual_proxy:
+            ydl_opts["proxy"] = manual_proxy
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([link])
+        return out
+
+    # ── YouTube: try manual proxy first, then auto free proxies ──────────
+    manual_proxy = os.getenv("PROXY_URL")
+    if manual_proxy:
+        if try_download_with_proxy(link, out, manual_proxy, progress_cb):
+            return out
+        raise RuntimeError(
+            "❌ YouTube download failed even with your proxy.\n"
+            "Check if PROXY_URL is correct in Railway variables."
+        )
+
+    # Auto free proxy mode
+    proxies = fetch_free_proxies()
+
+    if not proxies:
+        raise RuntimeError(
+            "❌ Could not fetch any free proxies.\n"
+            "YouTube requires a proxy from Railway servers.\n"
+            "Add a paid proxy: set PROXY_URL in Railway variables.\n"
+            "Format: `socks5://user:pass@host:port`"
+        )
+
+    # Try proxies one by one — stop at first success
+    MAX_TRIES = 12   # try up to 12 proxies before giving up
+    tried     = 0
+
+    for proxy in proxies:
+        if tried >= MAX_TRIES:
+            break
+        tried += 1
+
+        success = try_download_with_proxy(link, out, proxy, progress_cb)
+        if success:
+            return out   # ✅ worked!
+
+    # All proxies failed
+    raise RuntimeError(
+        f"❌ YouTube download failed after trying {tried} free proxies.\n\n"
+        "Free proxies are unreliable. For stable YouTube downloads:\n"
+        "• Get a free proxy at webshare.io (10 free proxies)\n"
+        "• Add to Railway vars: `PROXY_URL=socks5://user:pass@host:port`"
+    )
 
 
 # ── Telegram link parser ──────────────────────────────────────────────────
@@ -106,7 +265,6 @@ async def download_telegram(link: str, client: TelegramClient,
     if msg is None or not msg.media:
         raise ValueError("❌ Message not found or has no media.")
 
-    # Telethon download with progress callback
     def _tg_progress(received, total):
         if progress_cb and total:
             progress_cb(received / total * 100, 0, received, total)
@@ -114,7 +272,7 @@ async def download_telegram(link: str, client: TelegramClient,
     return await msg.download_media(file=out, progress_callback=_tg_progress)
 
 
-# ── Main entry called by bot ──────────────────────────────────────────────
+# ── Main entry ────────────────────────────────────────────────────────────
 
 async def download_video(link: str, client: TelegramClient,
                          progress_cb=None) -> str:
@@ -135,6 +293,6 @@ async def download_video(link: str, client: TelegramClient,
             )
         except Exception:
             raise ValueError(
-                "❌ Unsupported link.\nSupported: TikTok, Instagram, YouTube, "
-                "Twitter/X, Facebook, Reddit, Telegram"
+                "❌ Unsupported link.\nSupported: TikTok, Instagram, "
+                "YouTube, Twitter/X, Facebook, Reddit, Telegram"
             )
