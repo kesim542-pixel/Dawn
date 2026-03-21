@@ -1,99 +1,30 @@
 """
-Small FastAPI web server that runs alongside the Telegram bot.
+FastAPI web server running alongside the Telegram bot.
 Handles:
   1. TikTok domain verification
-  2. TikTok OAuth callback
+  2. TikTok OAuth callback → exchanges code for token
 """
 import os
+import asyncio
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse, HTMLResponse
 import uvicorn
+import httpx
 
 app = FastAPI()
 
-# ── TikTok domain verification ────────────────────────────────────────────
-# TikTok checks: https://your-domain.com/tiktok-developers-site-verification.txt
-TIKTOK_VERIFY = os.getenv(
-    "TIKTOK_VERIFY_TOKEN",
-    "tiktok-developers-site-verification=5djp8EhNLOXQ0OfzIlQ3Yqlk69dZfxAj"
-)
+# In-memory token store: str(telegram_user_id) → token dict
+tiktok_tokens: dict = {}
 
+
+# ── TikTok domain verification ────────────────────────────────────────────
 @app.get("/tiktok-developers-site-verification.txt",
          response_class=PlainTextResponse)
 async def tiktok_verify():
-    return TIKTOK_VERIFY
-
-
-# ── TikTok OAuth callback ─────────────────────────────────────────────────
-# TikTok redirects here after user authorizes the app
-tiktok_tokens = {}   # user_id → access_token (in-memory for now)
-
-@app.get("/tiktok/callback")
-async def tiktok_callback(code: str = None, state: str = None,
-                           error: str = None):
-    if error:
-        return HTMLResponse(
-            f"<h2>❌ TikTok Authorization Failed</h2>"
-            f"<p>Error: {error}</p>"
-            f"<p>Go back to Telegram and try again.</p>"
-        )
-
-    if not code:
-        return HTMLResponse(
-            "<h2>❌ No code received from TikTok</h2>"
-            "<p>Go back to Telegram and try again.</p>"
-        )
-
-    # Exchange code for access token
-    import httpx
-    client_key    = os.getenv("TIKTOK_CLIENT_KEY")
-    client_secret = os.getenv("TIKTOK_CLIENT_SECRET")
-
-    try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                "https://open.tiktokapis.com/v2/oauth/token/",
-                data={
-                    "client_key"    : client_key,
-                    "client_secret" : client_secret,
-                    "code"          : code,
-                    "grant_type"    : "authorization_code",
-                    "redirect_uri"  : os.getenv("TIKTOK_REDIRECT_URI"),
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"}
-            )
-        data = resp.json()
-
-        if "access_token" in data:
-            access_token  = data["access_token"]
-            refresh_token = data.get("refresh_token", "")
-            open_id       = data.get("open_id", "")
-
-            # Save tokens — state contains telegram user_id
-            if state:
-                tiktok_tokens[state] = {
-                    "access_token" : access_token,
-                    "refresh_token": refresh_token,
-                    "open_id"      : open_id,
-                }
-
-            return HTMLResponse(
-                "<html><body style='font-family:sans-serif;text-align:center;"
-                "padding:50px;background:#000;color:#fff'>"
-                "<h1>✅ TikTok Connected!</h1>"
-                "<p>Your TikTok account is now linked to Dawn Bot.</p>"
-                "<p>Go back to Telegram — you can now post videos to TikTok!</p>"
-                "<script>setTimeout(()=>window.close(),3000)</script>"
-                "</body></html>"
-            )
-        else:
-            return HTMLResponse(
-                f"<h2>❌ Token exchange failed</h2>"
-                f"<pre>{data}</pre>"
-            )
-
-    except Exception as e:
-        return HTMLResponse(f"<h2>❌ Error: {e}</h2>")
+    return os.getenv(
+        "TIKTOK_VERIFY_TOKEN",
+        "tiktok-developers-site-verification=5djp8EhNLOXQ0OfzIlQ3Yqlk69dZfxAj"
+    )
 
 
 # ── Health check ──────────────────────────────────────────────────────────
@@ -102,7 +33,136 @@ async def root():
     return {"status": "Dawn Bot is running ✅"}
 
 
-def get_tokens():
+# ── TikTok OAuth callback ─────────────────────────────────────────────────
+@app.get("/tiktok/callback")
+async def tiktok_callback(code: str = None, state: str = None,
+                          error: str = None, error_description: str = None):
+    if error:
+        return HTMLResponse(_page(
+            "❌ Authorization Failed",
+            f"Error: {error}<br>{error_description or ''}",
+            success=False
+        ))
+
+    if not code:
+        return HTMLResponse(_page(
+            "❌ No Code Received",
+            "TikTok did not send a code. Try again from Telegram.",
+            success=False
+        ))
+
+    # Exchange code for access token
+    client_key    = os.getenv("TIKTOK_CLIENT_KEY",    "sbawokxi9p57e448eq")
+    client_secret = os.getenv("TIKTOK_CLIENT_SECRET", "f2Jo1Ic0ROeHqeNZVAsiVozYuCyj0v6G")
+    redirect_uri  = os.getenv(
+        "TIKTOK_REDIRECT_URI",
+        "https://dawn-production-7c5f.up.railway.app/tiktok/callback"
+    )
+
+    try:
+        async with httpx.AsyncClient() as http:
+            resp = await http.post(
+                "https://open.tiktokapis.com/v2/oauth/token/",
+                data={
+                    "client_key"   : client_key,
+                    "client_secret": client_secret,
+                    "code"         : code,
+                    "grant_type"   : "authorization_code",
+                    "redirect_uri" : redirect_uri,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=30
+            )
+        data = resp.json()
+
+        if "access_token" in data:
+            token_info = {
+                "access_token" : data["access_token"],
+                "refresh_token": data.get("refresh_token", ""),
+                "open_id"      : data.get("open_id", ""),
+                "scope"        : data.get("scope", ""),
+            }
+
+            # Save under telegram user_id (state param)
+            if state:
+                tiktok_tokens[state] = token_info
+
+            # Get display name
+            display_name = "your account"
+            try:
+                async with httpx.AsyncClient() as http2:
+                    u = await http2.get(
+                        "https://open.tiktokapis.com/v2/user/info/"
+                        "?fields=display_name,username",
+                        headers={"Authorization": f"Bearer {data['access_token']}"},
+                        timeout=10
+                    )
+                udata = u.json()
+                display_name = (
+                    udata.get("data", {})
+                         .get("user", {})
+                         .get("display_name", "your account")
+                )
+            except Exception:
+                pass
+
+            return HTMLResponse(_page(
+                "✅ TikTok Connected!",
+                f"<b>{display_name}</b> is now linked to Dawn Bot.<br><br>"
+                "Go back to Telegram — you can now post videos to TikTok!<br>"
+                "<small>This window will close automatically.</small>",
+                success=True
+            ))
+
+        else:
+            return HTMLResponse(_page(
+                "❌ Token Exchange Failed",
+                f"<pre>{data}</pre>",
+                success=False
+            ))
+
+    except Exception as e:
+        return HTMLResponse(_page(
+            "❌ Server Error",
+            str(e),
+            success=False
+        ))
+
+
+def _page(title: str, body: str, success: bool = True) -> str:
+    color  = "#00ff88" if success else "#ff4444"
+    emoji  = "✅" if success else "❌"
+    script = "<script>setTimeout(()=>window.close(),4000)</script>" if success else ""
+    return f"""
+    <html>
+    <head>
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      <title>{title}</title>
+    </head>
+    <body style="
+      font-family: -apple-system, sans-serif;
+      background: #0a0a0a;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      text-align: center;
+      padding: 20px;
+    ">
+      <div>
+        <div style="font-size:64px">{emoji}</div>
+        <h1 style="color:{color};margin:16px 0">{title}</h1>
+        <p style="color:#aaa;font-size:16px;line-height:1.6">{body}</p>
+      </div>
+      {script}
+    </body>
+    </html>
+    """
+
+
+def get_tokens() -> dict:
     return tiktok_tokens
 
 
