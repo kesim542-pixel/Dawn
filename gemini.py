@@ -2,11 +2,11 @@
 Gemini AI - Fast viral caption and hashtag generation
 """
 import os
+import asyncio
 import httpx
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-# Use fastest model with short timeout
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     "gemini-2.0-flash:generateContent"
@@ -16,30 +16,53 @@ GEMINI_URL = (
 async def ask_gemini(prompt: str) -> str:
     if not GEMINI_API_KEY:
         raise RuntimeError(
-            "❌ GEMINI_API_KEY not set.\nAdd it to Railway variables."
+            "❌ GEMINI_API_KEY not set in Railway variables.\n"
+            "Go to aistudio.google.com → Get API key → add to Railway."
         )
 
-    async with httpx.AsyncClient() as http:
-        resp = await http.post(
-            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
-            json={
-                "contents": [{
-                    "parts": [{"text": prompt}]
-                }],
-                "generationConfig": {
-                    "temperature"    : 0.8,
-                    "maxOutputTokens": 600,   # reduced from 1024 = faster
-                    "topK"           : 20,    # reduced = faster
-                    "topP"           : 0.9,
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(
+            connect=5.0,
+            read=20.0,
+            write=5.0,
+            pool=5.0
+        )) as http:
+            resp = await http.post(
+                f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+                json={
+                    "contents": [{
+                        "parts": [{"text": prompt}]
+                    }],
+                    "generationConfig": {
+                        "temperature"    : 0.8,
+                        "maxOutputTokens": 500,
+                        "topK"           : 10,
+                        "topP"           : 0.9,
+                    }
                 }
-            },
-            timeout=20   # reduced from 30s = fail fast if slow
+            )
+    except httpx.TimeoutException:
+        raise RuntimeError(
+            "⏱ Gemini API timed out.\n"
+            "Check your internet or try again."
+        )
+    except httpx.ConnectError:
+        raise RuntimeError(
+            "🌐 Cannot connect to Gemini API.\n"
+            "Check network/proxy settings."
         )
 
     data = resp.json()
 
     if "error" in data:
-        raise RuntimeError(f"Gemini error: {data['error'].get('message', data)}")
+        code = data["error"].get("code", "")
+        msg  = data["error"].get("message", str(data))
+        if "API_KEY" in msg.upper() or code == 400:
+            raise RuntimeError(
+                f"❌ Invalid GEMINI_API_KEY.\n"
+                "Get a new key at aistudio.google.com"
+            )
+        raise RuntimeError(f"Gemini error: {msg}")
 
     try:
         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
@@ -52,30 +75,25 @@ async def generate_full_post(
     platform: str = "both",
     language: str = "English"
 ) -> dict:
-    """
-    Generate caption + hashtags in ONE API call (faster than 2 separate calls).
-    """
     platform_hint = {
         "telegram": "Telegram channel",
         "tiktok"  : "TikTok",
         "both"    : "Telegram and TikTok"
     }.get(platform, "social media")
 
-    # Shorter, faster prompt
     prompt = f"""Write viral {platform_hint} content in {language} for:
 {answers}
 
 Reply in EXACTLY this format:
 
 CAPTION:
-[Engaging caption with emojis, hook, CTA - max 150 words]
+[Engaging caption with emojis, hook, CTA - max 100 words]
 
 HASHTAGS:
-[20 viral hashtags on one line - format: #tag1 #tag2 #tag3]"""
+[15 viral hashtags on one line: #tag1 #tag2 #tag3]"""
 
     result = await ask_gemini(prompt)
 
-    # Parse response
     caption  = ""
     hashtags = ""
 
