@@ -5,8 +5,6 @@ import os
 import asyncio
 import httpx
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     "gemini-2.0-flash:generateContent"
@@ -14,7 +12,10 @@ GEMINI_URL = (
 
 
 async def ask_gemini(prompt: str) -> str:
-    if not GEMINI_API_KEY:
+    # Read fresh every call so Railway env var changes take effect
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+
+    if not api_key:
         raise RuntimeError(
             "❌ GEMINI_API_KEY not set in Railway variables.\n"
             "Go to aistudio.google.com → Get API key → add to Railway."
@@ -28,7 +29,7 @@ async def ask_gemini(prompt: str) -> str:
             pool=5.0
         )) as http:
             resp = await http.post(
-                f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+                f"{GEMINI_URL}?key={api_key}",
                 json={
                     "contents": [{
                         "parts": [{"text": prompt}]
@@ -57,7 +58,7 @@ async def ask_gemini(prompt: str) -> str:
     if "error" in data:
         code = data["error"].get("code", "")
         msg  = data["error"].get("message", str(data))
-        if "API_KEY" in msg.upper() or code == 400:
+        if "API_KEY" in msg.upper() or "invalid" in msg.lower() or code in (400, 403):
             raise RuntimeError(
                 f"❌ Invalid GEMINI_API_KEY.\n"
                 "Get a new key at aistudio.google.com"
