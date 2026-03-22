@@ -5,6 +5,8 @@ import shutil
 import threading
 import time
 import re as _re
+import warnings
+warnings.filterwarnings('ignore', message='.*per_message.*')
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, MessageHandler, CallbackQueryHandler,
