@@ -51,6 +51,16 @@ user_state     = {}
 phone_code_hash = {}
 banned_users   = set()
 
+# AI model preference (default = auto)
+AI_MODELS = {
+    "auto"       : "🤖 Auto (tries all)",
+    "gemini-2.5-flash"      : "⚡ Gemini 2.5 Flash",
+    "gemini-2.0-flash-001"  : "🔥 Gemini 2.0 Flash",
+    "gemini-1.5-flash-latest": "💨 Gemini 1.5 Flash",
+    "gemini-2.0-flash-lite" : "🪶 Gemini 2.0 Lite",
+}
+ai_model_setting = {"model": "auto"}  # global setting
+
 # ── User access database ──────────────────────────────────────────────────
 import json as _json
 DB_FILE = "users.json"
@@ -178,7 +188,8 @@ def main_menu_keyboard():
         [InlineKeyboardButton("🎵 Post to TikTok", callback_data="menu_tiktok")],
         [InlineKeyboardButton("📊 Stats",          callback_data="menu_stats"),
          InlineKeyboardButton("🔐 Auth",           callback_data="menu_auth")],
-        [InlineKeyboardButton("ℹ️ Help",           callback_data="menu_help")],
+        [InlineKeyboardButton("🤖 AI Settings",    callback_data="menu_ai_settings"),
+         InlineKeyboardButton("ℹ️ Help",           callback_data="menu_help")],
     ])
 
 def download_options_keyboard():
@@ -233,6 +244,17 @@ def back_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🏠 Main Menu", callback_data="menu_back")]
     ])
+
+def ai_model_keyboard():
+    current = ai_model_setting["model"]
+    buttons = []
+    for key, label in AI_MODELS.items():
+        tick = "✅ " if key == current else ""
+        buttons.append([InlineKeyboardButton(
+            f"{tick}{label}", callback_data=f"set_ai_{key}"
+        )])
+    buttons.append([InlineKeyboardButton("🔙 Back", callback_data="menu_back")])
+    return InlineKeyboardMarkup(buttons)
 
 
 # ══════════════════════════════════════════
@@ -462,11 +484,13 @@ async def auth_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def do_ai_generate(message, uid: int, topic: str, platform: str = "both"):
     try:
         # Hard 25 second timeout — won't get stuck forever
+        selected = ai_model_setting.get("model", "auto")
         result = await asyncio.wait_for(
             generate_full_post(
                 answers=f"The video is about: {topic}",
                 platform=platform,
-                language="English"
+                language="English",
+                model=selected
             ),
             timeout=25
         )
@@ -845,6 +869,30 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "menu_help":
         await query.message.edit_text(
             HELP_TEXT, parse_mode="Markdown", reply_markup=back_keyboard()
+        )
+        return
+
+    if data == "menu_ai_settings":
+        current     = ai_model_setting["model"]
+        model_name  = AI_MODELS.get(current, current)
+        api_key     = os.getenv("GEMINI_API_KEY", "")
+        key_status  = f"✅ Set (`{api_key[:8]}...`)" if api_key else "❌ Not set"
+        await query.message.edit_text(
+            f"🤖 *AI Settings*\n━━━━━━━━━━━━━━━━━━\n🔑 API Key: {key_status}\n📦 Model: {model_name}\n━━━━━━━━━━━━━━━━━━\nChoose a model below.\n💡 Use *Auto* if unsure.",
+            parse_mode="Markdown",
+            reply_markup=ai_model_keyboard()
+        )
+        return
+
+    if data.startswith("set_ai_"):
+        model_key  = data.replace("set_ai_", "")
+        ai_model_setting["model"] = model_key
+        model_name = AI_MODELS.get(model_key, model_key)
+        await query.answer(f"✅ AI model set to {model_name}", show_alert=False)
+        await query.message.edit_text(
+            f"🤖 *AI Settings*\n━━━━━━━━━━━━━━━━━━\n✅ Model set to: *{model_name}*\n━━━━━━━━━━━━━━━━━━",
+            parse_mode="Markdown",
+            reply_markup=ai_model_keyboard()
         )
         return
 
