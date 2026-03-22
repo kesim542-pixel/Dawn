@@ -2,14 +2,14 @@
 FastAPI web server running alongside the Telegram bot.
 Handles:
   1. TikTok domain verification
-  2. TikTok OAuth callback → exchanges code for token
+  2. TikTok OAuth callback
+  3. Health check
 """
 import os
-import asyncio
+import httpx
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse, HTMLResponse
 import uvicorn
-import httpx
 
 app = FastAPI()
 
@@ -17,26 +17,35 @@ app = FastAPI()
 tiktok_tokens: dict = {}
 
 
-# ── TikTok domain verification ────────────────────────────────────────────
-@app.get("/tiktok-developers-site-verification.txt",
-         response_class=PlainTextResponse)
-async def tiktok_verify():
-    return os.getenv(
-        "TIKTOK_VERIFY_TOKEN",
-        "tiktok-developers-site-verification=5djp8EhNLOXQ0OfzIlQ3Yqlk69dZfxAj"
-    )
-
-
 # ── Health check ──────────────────────────────────────────────────────────
 @app.get("/")
 async def root():
     return {"status": "Dawn Bot is running ✅"}
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+# ── TikTok domain verification ────────────────────────────────────────────
+@app.get("/tiktok-developers-site-verification.txt",
+         response_class=PlainTextResponse)
+async def tiktok_verify():
+    token = os.getenv(
+        "TIKTOK_VERIFY_TOKEN",
+        "tiktok-developers-site-verification=5djp8EhNLOXQ0OfzIlQ3Yqlk69dZfxAj"
+    )
+    return token
+
 
 # ── TikTok OAuth callback ─────────────────────────────────────────────────
 @app.get("/tiktok/callback")
-async def tiktok_callback(code: str = None, state: str = None,
-                          error: str = None, error_description: str = None):
+async def tiktok_callback(
+    code: str = None,
+    state: str = None,
+    error: str = None,
+    error_description: str = None
+):
     if error:
         return HTMLResponse(_page(
             "❌ Authorization Failed",
@@ -51,7 +60,6 @@ async def tiktok_callback(code: str = None, state: str = None,
             success=False
         ))
 
-    # Exchange code for access token
     client_key    = os.getenv("TIKTOK_CLIENT_KEY",    "sbawokxi9p57e448eq")
     client_secret = os.getenv("TIKTOK_CLIENT_SECRET", "f2Jo1Ic0ROeHqeNZVAsiVozYuCyj0v6G")
     redirect_uri  = os.getenv(
@@ -82,8 +90,6 @@ async def tiktok_callback(code: str = None, state: str = None,
                 "open_id"      : data.get("open_id", ""),
                 "scope"        : data.get("scope", ""),
             }
-
-            # Save under telegram user_id (state param)
             if state:
                 tiktok_tokens[state] = token_info
 
@@ -110,10 +116,9 @@ async def tiktok_callback(code: str = None, state: str = None,
                 "✅ TikTok Connected!",
                 f"<b>{display_name}</b> is now linked to Dawn Bot.<br><br>"
                 "Go back to Telegram — you can now post videos to TikTok!<br>"
-                "<small>This window will close automatically.</small>",
+                "<small>This window will close in 4 seconds.</small>",
                 success=True
             ))
-
         else:
             return HTMLResponse(_page(
                 "❌ Token Exchange Failed",
@@ -133,33 +138,23 @@ def _page(title: str, body: str, success: bool = True) -> str:
     color  = "#00ff88" if success else "#ff4444"
     emoji  = "✅" if success else "❌"
     script = "<script>setTimeout(()=>window.close(),4000)</script>" if success else ""
-    return f"""
-    <html>
-    <head>
-      <meta name="viewport" content="width=device-width,initial-scale=1">
-      <title>{title}</title>
-    </head>
-    <body style="
-      font-family: -apple-system, sans-serif;
-      background: #0a0a0a;
-      color: #fff;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      margin: 0;
-      text-align: center;
-      padding: 20px;
-    ">
-      <div>
-        <div style="font-size:64px">{emoji}</div>
-        <h1 style="color:{color};margin:16px 0">{title}</h1>
-        <p style="color:#aaa;font-size:16px;line-height:1.6">{body}</p>
-      </div>
-      {script}
-    </body>
-    </html>
-    """
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{title}</title>
+</head>
+<body style="font-family:-apple-system,sans-serif;background:#0a0a0a;color:#fff;
+  display:flex;align-items:center;justify-content:center;min-height:100vh;
+  margin:0;text-align:center;padding:20px;box-sizing:border-box">
+  <div>
+    <div style="font-size:64px">{emoji}</div>
+    <h1 style="color:{color};margin:16px 0">{title}</h1>
+    <p style="color:#aaa;font-size:16px;line-height:1.6">{body}</p>
+  </div>
+  {script}
+</body>
+</html>"""
 
 
 def get_tokens() -> dict:
@@ -167,5 +162,13 @@ def get_tokens() -> dict:
 
 
 def run_server():
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+    """Run FastAPI server. PORT env var set by Railway automatically."""
+    port = int(os.getenv("PORT", "8000"))
+    print(f"✅ Starting web server on port {port}")
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        log_level="info",
+        access_log=False
+    )

@@ -4,9 +4,5 @@ builder = "dockerfile"
 [deploy]
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5
-
-[[services]]
-name = "Dawn"
-
-[services.networking]
-listenPort = 8000
+healthcheckPath = "/health"
+healthcheckTimeout = 30

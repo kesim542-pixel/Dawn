@@ -16,9 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Tell Railway which port the web server listens on
+# Railway injects PORT automatically - we use it in server.py
 EXPOSE 8000
-
-ENV PORT=8000
 
 CMD ["python", "main.py"]

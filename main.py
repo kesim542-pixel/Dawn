@@ -109,11 +109,13 @@ def post_destination_keyboard():
     ])
 
 def tiktok_privacy_keyboard():
+    # In sandbox mode only SELF_ONLY works
+    # All options shown but code forces private until app approved
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌍 Public",       callback_data="tt_pub")],
-        [InlineKeyboardButton("👥 Friends Only", callback_data="tt_friends")],
-        [InlineKeyboardButton("🔒 Private",      callback_data="tt_private")],
-        [InlineKeyboardButton("🔙 Back",         callback_data="menu_back")],
+        [InlineKeyboardButton("🌍 Public (needs approval)",  callback_data="tt_pub")],
+        [InlineKeyboardButton("👥 Friends Only",             callback_data="tt_friends")],
+        [InlineKeyboardButton("🔒 Private ✅ (works now)",   callback_data="tt_private")],
+        [InlineKeyboardButton("🔙 Back",                     callback_data="menu_back")],
     ])
 
 def caption_choice_keyboard():
@@ -876,9 +878,12 @@ def _cleanup(uid: int):
 # ══════════════════════════════════════════
 
 async def main():
+    # Start web server FIRST — Railway needs it to respond before bot starts
+    import time
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
-    print("✅ Web server running on port 8000")
+    time.sleep(2)  # Give server time to bind to port
+    print(f"✅ Web server started on port {os.getenv('PORT', 8000)}")
 
     await client.connect()
 
