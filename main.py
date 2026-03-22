@@ -577,6 +577,13 @@ async def show_confirm(message, uid: int):
 #  RECEIVE MESSAGES
 # ══════════════════════════════════════════
 
+async def handle_web_app_data_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Wrapper to check if message has web_app_data"""
+    if not update.message or not update.message.web_app_data:
+        return
+    await handle_web_app_data(update, context)
+
+
 async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle data sent from Mini App via sendData()"""
     if not await guard(update): return
@@ -1352,7 +1359,7 @@ async def main():
     app.add_handler(CommandHandler("testai", testai_command))
     app.add_handler(auth_conv)
     app.add_handler(CallbackQueryHandler(handle_callback))
-    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
+    app.add_handler(MessageHandler(filters.ALL, handle_web_app_data_check))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, receive_video))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_message))
 
