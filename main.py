@@ -51,6 +51,34 @@ user_state     = {}
 phone_code_hash = {}
 banned_users   = set()
 
+# ── User access database ──────────────────────────────────────────────────
+import json as _json
+DB_FILE = "users.json"
+
+def load_db() -> dict:
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE) as f:
+                return _json.load(f)
+        except Exception:
+            pass
+    return {"approved": {}, "banned": {}, "pending": {}}
+
+def save_db(db: dict):
+    with open(DB_FILE, "w") as f:
+        _json.dump(db, f, indent=2)
+
+db = load_db()
+
+def is_approved(uid: int) -> bool:
+    return str(uid) in db["approved"]
+
+def is_banned_db(uid: int) -> bool:
+    return str(uid) in db["banned"]
+
+def is_pending(uid: int) -> bool:
+    return str(uid) in db["pending"]
+
 
 # ══════════════════════════════════════════
 #  ADMIN GUARD
@@ -58,11 +86,19 @@ banned_users   = set()
 
 def is_admin(uid): return uid == ADMIN_ID
 
+from datetime import datetime as _dt
+
 async def guard(update: Update) -> bool:
-    uid = update.effective_user.id
-    if uid == ADMIN_ID:
+    uid   = update.effective_user.id
+    name  = update.effective_user.full_name or "Unknown"
+    uname = update.effective_user.username or "no_username"
+
+    # Admin always allowed
+    if is_admin(uid):
         return True
-    if uid in banned_users:
+
+    # Banned in DB
+    if is_banned_db(uid):
         try:
             await update.effective_message.reply_text(
                 "🚫 *You are banned from this bot.*",
@@ -71,14 +107,64 @@ async def guard(update: Update) -> bool:
         except Exception:
             pass
         return False
-    banned_users.add(uid)
+
+    # Approved in DB
+    if is_approved(uid):
+        return True
+
+    # Pending
+    if is_pending(uid):
+        try:
+            await update.effective_message.reply_text(
+                "⏳ *Your request is pending.*\n\nPlease wait for admin approval.",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+        return False
+
+    # New unknown user — show access request
+    db["pending"][str(uid)] = {
+        "name"    : name,
+        "username": uname,
+        "time"    : _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    save_db(db)
+
     try:
         await update.effective_message.reply_text(
-            "🚫 *Access Denied.*\n\nThis is a private bot.\nYou have been banned automatically.",
+            f"👋 *Welcome, {name}!*\n\n"
+            "This is a *private bot*.\n\n"
+            "Your access request has been sent to the admin.\n"
+            "You will be notified when approved or rejected.",
             parse_mode="Markdown"
         )
     except Exception:
         pass
+
+    # Notify admin
+    try:
+        from telegram import Bot as _Bot
+        bot = _Bot(token=BOT_TOKEN)
+        await bot.send_message(
+            ADMIN_ID,
+            f"🔔 *New Access Request*\n\n"
+            f"👤 Name    : {name}\n"
+            f"🔗 Username: @{uname}\n"
+            f"🆔 User ID : `{uid}`\n"
+            f"🕐 Time    : {_dt.now().strftime('%H:%M:%S')}",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Approve", callback_data=f"approve_{uid}"),
+                    InlineKeyboardButton("❌ Reject",  callback_data=f"reject_{uid}"),
+                ],
+                [InlineKeyboardButton("🚫 Ban",       callback_data=f"ban_{uid}")]
+            ])
+        )
+    except Exception:
+        pass
+
     return False
 
 
@@ -222,10 +308,19 @@ async def show_stats(message):
         f"💾 Disk     : {free//(1024**3)}GB free / {total//(1024**3)}GB total\n"
         f"🌐 Proxy    : {proxy_status}\n"
         f"📢 Channel  : `{CHANNEL}`\n"
-        f"🚫 Banned   : {len(banned_users)} user(s)\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "*👥 User Access:*\n"
+        f"✅ Approved : {len(db['approved'])} users\n"
+        f"⏳ Pending  : {len(db['pending'])} users\n"
+        f"🚫 Banned   : {len(db['banned'])} users\n"
         "━━━━━━━━━━━━━━━━━━",
         parse_mode="Markdown",
-        reply_markup=back_keyboard()
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("👥 Manage Users", callback_data="admin_users"),
+             InlineKeyboardButton("⏳ Pending",      callback_data="admin_pending")],
+            [InlineKeyboardButton("🚫 Banned",       callback_data="admin_banned")],
+            [InlineKeyboardButton("🏠 Main Menu",    callback_data="menu_back")],
+        ])
     )
 
 
@@ -505,6 +600,199 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = await main_menu_text()
         await query.message.edit_text(
             text, parse_mode="Markdown", reply_markup=main_menu_keyboard()
+        )
+        return
+
+    # ── Admin: Approve user ────────────────────────────────────────────────
+    if data.startswith("approve_") and is_admin(uid):
+        target_uid  = data.split("_")[1]
+        target_info = db["pending"].get(target_uid, db["approved"].get(target_uid, {}))
+        target_name = target_info.get("name", "User")
+        db["approved"][target_uid] = {
+            "name"       : target_name,
+            "username"   : target_info.get("username", ""),
+            "approved_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        db["pending"].pop(target_uid, None)
+        db["banned"].pop(target_uid, None)
+        save_db(db)
+        await query.message.edit_text(
+            f"✅ *Approved!*\n\n{target_name} now has access to Dawn Bot.",
+            parse_mode="Markdown"
+        )
+        try:
+            await context.bot.send_message(
+                int(target_uid),
+                "✅ *Your access has been approved!*\n\n"
+                "Welcome to Dawn Bot! 🎉\n\n"
+                "Tap /start to begin.",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+        return
+
+    # ── Admin: Reject user ─────────────────────────────────────────────────
+    if data.startswith("reject_") and is_admin(uid):
+        target_uid  = data.split("_")[1]
+        target_info = db["pending"].get(target_uid, {})
+        target_name = target_info.get("name", "User")
+        db["pending"].pop(target_uid, None)
+        save_db(db)
+        await query.message.edit_text(
+            f"❌ *Rejected!*\n\n{target_name}'s request has been rejected.",
+            parse_mode="Markdown"
+        )
+        try:
+            await context.bot.send_message(
+                int(target_uid),
+                "❌ *Your access request has been rejected.*\n\n"
+                "You do not have permission to use this bot.",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+        return
+
+    # ── Admin: Ban user ────────────────────────────────────────────────────
+    if data.startswith("ban_") and is_admin(uid):
+        target_uid  = data.split("_")[1]
+        target_info = (db["pending"].get(target_uid)
+                      or db["approved"].get(target_uid) or {})
+        target_name = target_info.get("name", "User")
+        db["banned"][target_uid] = {
+            "name"     : target_name,
+            "banned_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        db["pending"].pop(target_uid, None)
+        db["approved"].pop(target_uid, None)
+        save_db(db)
+        await query.message.edit_text(
+            f"🚫 *Banned!*\n\n{target_name} has been banned.",
+            parse_mode="Markdown"
+        )
+        try:
+            await context.bot.send_message(
+                int(target_uid),
+                "🚫 *You have been banned from Dawn Bot.*",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+        return
+
+    # ── Admin: Users list ──────────────────────────────────────────────────
+    if data == "admin_users" and is_admin(uid):
+        if not db["approved"]:
+            await query.message.edit_text(
+                "✅ *No approved users yet.*",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Back", callback_data="menu_back")
+                ]])
+            )
+            return
+        text = "✅ *Approved Users:*\n\n"
+        btns = []
+        for u, info in list(db["approved"].items())[-20:]:
+            text += f"👤 {info['name']} — `{u}`\n"
+            btns.append([InlineKeyboardButton(
+                f"🗑 {info['name'][:15]}", callback_data=f"revoke_{u}"
+            )])
+        btns.append([InlineKeyboardButton("🔙 Back", callback_data="menu_back")])
+        await query.message.edit_text(
+            text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(btns)
+        )
+        return
+
+    # ── Admin: Pending list ────────────────────────────────────────────────
+    if data == "admin_pending" and is_admin(uid):
+        if not db["pending"]:
+            await query.message.edit_text(
+                "⏳ *No pending requests.*",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Back", callback_data="menu_back")
+                ]])
+            )
+            return
+        text = "⏳ *Pending Requests:*\n\n"
+        btns = []
+        for u, info in db["pending"].items():
+            text += f"👤 {info['name']} (@{info['username']}) — `{u}`\n"
+            btns.append([
+                InlineKeyboardButton(f"✅ {info['name'][:12]}", callback_data=f"approve_{u}"),
+                InlineKeyboardButton("❌", callback_data=f"reject_{u}"),
+                InlineKeyboardButton("🚫", callback_data=f"ban_{u}"),
+            ])
+        btns.append([InlineKeyboardButton("🔙 Back", callback_data="menu_back")])
+        await query.message.edit_text(
+            text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(btns)
+        )
+        return
+
+    # ── Admin: Banned list ─────────────────────────────────────────────────
+    if data == "admin_banned" and is_admin(uid):
+        if not db["banned"]:
+            await query.message.edit_text(
+                "🚫 *No banned users.*",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Back", callback_data="menu_back")
+                ]])
+            )
+            return
+        text = "🚫 *Banned Users:*\n\n"
+        btns = []
+        for u, info in db["banned"].items():
+            text += f"👤 {info['name']} — `{u}`\n"
+            btns.append([InlineKeyboardButton(
+                f"✅ Unban {info['name'][:12]}", callback_data=f"unban_{u}"
+            )])
+        btns.append([InlineKeyboardButton("🔙 Back", callback_data="menu_back")])
+        await query.message.edit_text(
+            text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(btns)
+        )
+        return
+
+    # ── Admin: Revoke access ───────────────────────────────────────────────
+    if data.startswith("revoke_") and is_admin(uid):
+        target_uid  = data.split("_")[1]
+        target_name = db["approved"].get(target_uid, {}).get("name", "User")
+        db["approved"].pop(target_uid, None)
+        save_db(db)
+        await query.message.edit_text(
+            f"✅ *Access Revoked!*\n\n{target_name} access removed.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Back", callback_data="admin_users")
+            ]])
+        )
+        try:
+            await context.bot.send_message(
+                int(target_uid),
+                "⚠️ *Your access has been revoked.*",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+        return
+
+    # ── Admin: Unban ───────────────────────────────────────────────────────
+    if data.startswith("unban_") and is_admin(uid):
+        target_uid  = data.split("_")[1]
+        target_name = db["banned"].get(target_uid, {}).get("name", "User")
+        db["banned"].pop(target_uid, None)
+        save_db(db)
+        await query.message.edit_text(
+            f"✅ *Unbanned!*\n\n{target_name} can now request access again.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Back", callback_data="admin_banned")
+            ]])
         )
         return
 
