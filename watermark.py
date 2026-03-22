@@ -108,11 +108,10 @@ def add_watermark(input_file: str, progress_cb=None) -> tuple:
 
         # ── HIGH QUALITY settings ─────────────────────────────────────
         "-c:v", "libx264",
-        "-preset", "slow",       # slow = better compression at same quality
-        "-crf", "18",            # 18 = visually lossless (was 23 before)
+        "-preset", "ultrafast",  # ultrafast = much faster encoding on Railway
+        "-crf", "23",            # 23 = good quality, faster than 18
         "-b:v", str(bitrate),    # match source bitrate
-        "-maxrate", str(bitrate * 2),
-        "-bufsize", str(bitrate * 2),
+
         "-pix_fmt", "yuv420p",
         "-colorspace", "bt709",
         "-color_primaries", "bt709",
