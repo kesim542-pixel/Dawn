@@ -1408,14 +1408,15 @@ async def main():
         ],
     )
 
-    # Web App data MUST be first handler
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, web_app_or_text), group=0)
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("testai", testai_command))
+    # Auth conversation MUST be before web_app handler
     app.add_handler(auth_conv)
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, receive_video))
+    # Web App data handler - catches text + web_app_data
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, web_app_or_text))
 
     await app.initialize()
     # Kill any existing connections first
