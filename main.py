@@ -795,10 +795,19 @@ async def process_and_post(message, uid: int):
                     caption=full_caption,
                     privacy=privacy
                 )
-                pid = result.get("publish_id", "")
-                await tt_prog.done(
-                    f"Posted to TikTok!\nID: `{pid}`\nCheck your TikTok profile."
-                )
+                pid    = result.get("publish_id", "")
+                method = result.get("method", "")
+                note   = result.get("note", "")
+                if method == "inbox_draft":
+                    await tt_prog.done(
+                        f"✅ Video uploaded to TikTok!\n\n"
+                        f"📥 Open TikTok app → *Inbox* to find your video and publish it publicly.\n\n"
+                        f"ID: `{pid}`"
+                    )
+                else:
+                    await tt_prog.done(
+                        f"✅ Posted to TikTok!\nID: `{pid}`\nCheck your TikTok profile."
+                    )
             except Exception as e:
                 await tt_prog.error(f"TikTok failed:\n{str(e)[:300]}")
 
