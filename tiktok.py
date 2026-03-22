@@ -5,16 +5,13 @@ Uses TikTok Content Posting API v2
 import os
 import httpx
 
-
-TIKTOK_CLIENT_KEY    = os.getenv("TIKTOK_CLIENT_KEY", "sbawokxi9p57e448eq")
+TIKTOK_CLIENT_KEY    = os.getenv("TIKTOK_CLIENT_KEY",    "sbawokxi9p57e448eq")
 TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET", "f2Jo1Ic0ROeHqeNZVAsiVozYuCyj0v6G")
 TIKTOK_REDIRECT_URI  = os.getenv(
     "TIKTOK_REDIRECT_URI",
     "https://dawn-production-7c5f.up.railway.app/tiktok/callback"
 )
 
-
-# ── Build OAuth login URL ─────────────────────────────────────────────────
 
 def get_auth_url(user_id: int) -> str:
     return (
@@ -26,8 +23,6 @@ def get_auth_url(user_id: int) -> str:
         f"&state={user_id}"
     )
 
-
-# ── Exchange code for token ───────────────────────────────────────────────
 
 async def exchange_code(code: str) -> dict:
     async with httpx.AsyncClient() as http:
@@ -46,8 +41,6 @@ async def exchange_code(code: str) -> dict:
     return resp.json()
 
 
-# ── Get user info ─────────────────────────────────────────────────────────
-
 async def get_user_info(access_token: str) -> dict:
     async with httpx.AsyncClient() as http:
         resp = await http.get(
@@ -59,40 +52,61 @@ async def get_user_info(access_token: str) -> dict:
     return resp.json()
 
 
-# ── Post video (Direct Post) ──────────────────────────────────────────────
-
 async def post_video(
     access_token: str,
     video_path: str,
     caption: str = "",
-    privacy: str = "PUBLIC_TO_EVERYONE"
+    privacy: str = "SELF_ONLY"   # Always SELF_ONLY until app approved
 ) -> dict:
     """
-    Upload and post video to TikTok using Content Posting API.
-    Steps:
-      1. Initialize upload → get upload_url + publish_id
-      2. Upload video bytes to upload_url
-      3. Check status
+    Upload and post video to TikTok.
+    NOTE: Sandbox mode ONLY supports SELF_ONLY (private) posting.
+    After TikTok approves your app, change privacy to PUBLIC_TO_EVERYONE.
     """
 
-    # ── Step 1: Init upload ───────────────────────────────────────────────
     file_size = os.path.getsize(video_path)
 
+    # Check creator info first to get allowed privacy options
+    async with httpx.AsyncClient() as http:
+        creator_resp = await http.post(
+            "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type" : "application/json; charset=UTF-8"
+            },
+            timeout=30
+        )
+    creator_data = creator_resp.json()
+
+    # Use allowed privacy level from creator info if available
+    allowed_privacy = "SELF_ONLY"  # default safe value
+    try:
+        privacy_options = (
+            creator_data.get("data", {})
+            .get("privacy_level_options", [])
+        )
+        if privacy_options:
+            # Use first available option (most permissive the account allows)
+            allowed_privacy = privacy_options[0]
+    except Exception:
+        pass
+
+    # Step 1: Init upload
     async with httpx.AsyncClient() as http:
         init_resp = await http.post(
             "https://open.tiktokapis.com/v2/post/publish/video/init/",
             json={
                 "post_info": {
-                    "title"           : caption[:150] if caption else "🎬 New video",
-                    "privacy_level"   : privacy,
-                    "disable_duet"    : False,
-                    "disable_comment" : False,
-                    "disable_stitch"  : False,
+                    "title"          : caption[:150] if caption else "New video",
+                    "privacy_level"  : allowed_privacy,
+                    "disable_duet"   : False,
+                    "disable_comment": False,
+                    "disable_stitch" : False,
                 },
                 "source_info": {
-                    "source"         : "FILE_UPLOAD",
-                    "video_size"     : file_size,
-                    "chunk_size"     : file_size,
+                    "source"           : "FILE_UPLOAD",
+                    "video_size"       : file_size,
+                    "chunk_size"       : file_size,
                     "total_chunk_count": 1,
                 }
             },
@@ -111,7 +125,7 @@ async def post_video(
     upload_url = init_data["data"]["upload_url"]
     publish_id = init_data["data"]["publish_id"]
 
-    # ── Step 2: Upload video ──────────────────────────────────────────────
+    # Step 2: Upload video bytes
     with open(video_path, "rb") as vf:
         video_bytes = vf.read()
 
@@ -124,7 +138,7 @@ async def post_video(
                 "Content-Range" : f"bytes 0-{file_size-1}/{file_size}",
                 "Content-Length": str(file_size),
             },
-            timeout=300   # large file upload — 5 min timeout
+            timeout=300
         )
 
     if upload_resp.status_code not in (200, 201, 206):
@@ -133,7 +147,7 @@ async def post_video(
             f"{upload_resp.text[:300]}"
         )
 
-    # ── Step 3: Check publish status ─────────────────────────────────────
+    # Step 3: Check status
     async with httpx.AsyncClient() as http:
         status_resp = await http.post(
             "https://open.tiktokapis.com/v2/post/publish/status/fetch/",
@@ -145,8 +159,8 @@ async def post_video(
             timeout=30
         )
 
-    status_data = status_resp.json()
     return {
-        "publish_id": publish_id,
-        "status"    : status_data
+        "publish_id"    : publish_id,
+        "privacy_used"  : allowed_privacy,
+        "status"        : status_resp.json()
     }
