@@ -7,7 +7,7 @@ import time
 import re as _re
 import warnings
 warnings.filterwarnings('ignore', message='.*per_message.*')
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import (
     ApplicationBuilder, MessageHandler, CallbackQueryHandler,
     CommandHandler, ConversationHandler, filters, ContextTypes,
@@ -184,6 +184,7 @@ async def guard(update: Update) -> bool:
 
 def main_menu_keyboard():
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📱 Open Mini App", web_app=WebAppInfo(url=os.getenv("MINIAPP_URL","https://kesim542-pixel.github.io/dawn-miniapp/")))],
         [InlineKeyboardButton("⬇️ Download Video", callback_data="menu_download")],
         [InlineKeyboardButton("🎵 Post to TikTok", callback_data="menu_tiktok")],
         [InlineKeyboardButton("📊 Stats",          callback_data="menu_stats"),
@@ -575,6 +576,116 @@ async def show_confirm(message, uid: int):
 # ══════════════════════════════════════════
 #  RECEIVE MESSAGES
 # ══════════════════════════════════════════
+
+async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle data sent from Mini App via sendData()"""
+    if not await guard(update): return
+    uid  = update.effective_user.id
+    try:
+        import json as _json
+        data = _json.loads(update.message.web_app_data.data)
+        action = data.get("action", "")
+
+        if action == "download":
+            # Store link and settings from miniapp
+            url = data.get("url", "")
+            if not url:
+                await update.message.reply_text("❗ No URL received from Mini App.")
+                return
+            user_links[uid] = url
+            if uid not in user_post_data: user_post_data[uid] = {}
+            user_post_data[uid]["wm"]      = "wm_on" if data.get("wm") == "on" else "wm_off"
+            user_post_data[uid]["dest"]    = "dest_" + data.get("dest", "telegram")
+            user_post_data[uid]["privacy"] = data.get("privacy", "SELF_ONLY")
+
+            cap_mode = data.get("caption_mode", "skip")
+            if cap_mode == "manual":
+                user_post_data[uid]["caption"]  = data.get("caption", "")
+                user_post_data[uid]["hashtags"] = data.get("hashtags", "")
+                await show_confirm(update.message, uid)
+            elif cap_mode == "ai":
+                topic    = data.get("topic", "viral video")
+                dest     = user_post_data[uid].get("dest", "dest_telegram")
+                platform = "tiktok" if dest=="dest_tiktok" else "both" if dest=="dest_both" else "telegram"
+                gen_msg  = await update.message.reply_text(
+                    "🤖 *Generating viral content...*\n\n⏳ Please wait...",
+                    parse_mode="Markdown"
+                )
+                user_post_data[uid]["ai_topic"] = topic
+                await do_ai_generate(gen_msg, uid, topic, platform)
+            else:
+                user_post_data[uid]["caption"]  = ""
+                user_post_data[uid]["hashtags"] = ""
+                await show_confirm(update.message, uid)
+
+        elif action == "post_file":
+            if uid not in user_post_data: user_post_data[uid] = {}
+            user_post_data[uid]["dest"]     = "dest_" + data.get("dest", "telegram")
+            user_post_data[uid]["privacy"]  = data.get("privacy", "SELF_ONLY")
+            user_post_data[uid]["caption"]  = data.get("caption", "")
+            user_post_data[uid]["hashtags"] = data.get("hashtags", "")
+            await update.message.reply_text(
+                "✅ *Settings received!*\n\nNow send me the video file to post.",
+                parse_mode="Markdown"
+            )
+
+        elif action == "generate_ai":
+            topic    = data.get("topic", "viral video")
+            platform = data.get("platform", "both")
+            gen_msg  = await update.message.reply_text(
+                "🤖 *Generating viral content...*\n\n⏳ Please wait...",
+                parse_mode="Markdown"
+            )
+            if uid not in user_post_data: user_post_data[uid] = {}
+            user_post_data[uid]["ai_topic"] = topic
+            await do_ai_generate(gen_msg, uid, topic, platform)
+
+        elif action == "set_model":
+            model = data.get("model", "auto")
+            ai_model_setting["model"] = model
+            await update.message.reply_text(
+                f"✅ *AI model updated!*\n\nSelected: `{model}`",
+                parse_mode="Markdown"
+            )
+
+        elif action == "broadcast":
+            if not is_admin(uid):
+                await update.message.reply_text("⛔ Admin only.")
+                return
+            msg   = data.get("message", "")
+            sent  = 0
+            failed= 0
+            for tuid in db["approved"]:
+                try:
+                    await context.bot.send_message(
+                        int(tuid),
+                        f"📢 *Message from Admin:*\n\n{msg}",
+                        parse_mode="Markdown"
+                    )
+                    sent += 1
+                except Exception:
+                    failed += 1
+            await update.message.reply_text(
+                f"📢 *Broadcast sent!*\n\n✅ Sent: {sent}\n❌ Failed: {failed}",
+                parse_mode="Markdown"
+            )
+
+        elif action == "admin_view":
+            if not is_admin(uid): return
+            vtype = data.get("type", "users")
+            users = db.get(vtype if vtype != "users" else "approved", {})
+            if not users:
+                await update.message.reply_text(f"No {vtype} found.")
+                return
+            lines = "\n".join([f"• {v.get('name','?')} (`{k}`)" for k,v in list(users.items())[:20]])
+            await update.message.reply_text(
+                f"*{vtype.title()} users:*\n{lines}",
+                parse_mode="Markdown"
+            )
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Mini App error: {e}")
+
 
 async def receive_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update): return
@@ -1241,6 +1352,7 @@ async def main():
     app.add_handler(CommandHandler("testai", testai_command))
     app.add_handler(auth_conv)
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, receive_video))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_message))
 
