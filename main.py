@@ -900,7 +900,7 @@ async def main():
         },
         fallbacks=[
             CommandHandler("cancel", auth_cancel),
-            CallbackQueryHandler(auth_cancel, pattern="^auth_cancel$"),
+            CallbackQueryHandler(auth_cancel, pattern="^auth_cancel$", per_message=False),
         ],
     )
 
@@ -912,9 +912,14 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_message))
 
     await app.initialize()
+    # Clear any existing webhook or polling conflicts
     await app.bot.delete_webhook(drop_pending_updates=True)
+    await asyncio.sleep(1)  # Wait for conflict to clear
     await app.start()
-    await app.updater.start_polling()
+    await app.updater.start_polling(
+        drop_pending_updates=True,
+        allowed_updates=["message", "callback_query"]
+    )
 
     print("✅ Bot is running...")
     await asyncio.Event().wait()
