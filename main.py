@@ -46,10 +46,9 @@ WAIT_CONFIRM  = 6
 user_links      = {}   # uid → url
 user_videos     = {}   # uid → local file path
 user_post_data  = {}   # uid → {caption, hashtags, privacy, dest, wm, file, thumb}
+user_state      = {}   # uid → state string (replaces context.user_data)
 phone_code_hash = {}
 banned_users    = set()
-
-phone_code_hash = {}
 
 
 # ══════════════════════════════════════════
@@ -347,8 +346,8 @@ async def receive_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
 
     # Waiting for caption input
-    if context.user_data.get("state") == "wait_caption":
-        context.user_data["state"] = None
+    if user_state.get(uid) == "wait_caption":
+        user_state.pop(uid, None)
         caption = "" if text == "-" else text
         user_post_data[uid]["caption"] = caption
         # Now ask for hashtags
@@ -361,12 +360,12 @@ async def receive_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("⏭ Skip", callback_data="skip_hashtags")
             ]])
         )
-        context.user_data["state"] = "wait_hashtags"
+        user_state[uid] = "wait_hashtags"
         return
 
     # Waiting for hashtags input
-    if context.user_data.get("state") == "wait_hashtags":
-        context.user_data["state"] = None
+    if user_state.get(uid) == "wait_hashtags":
+        user_state.pop(uid, None)
         hashtags = "" if text == "-" else text
         user_post_data[uid]["hashtags"] = hashtags
         await show_confirm(update.message, uid)
@@ -472,7 +471,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Navigation ────────────────────────────────────────────────────────
     if data == "menu_back":
-        context.user_data["state"] = None
+        user_state.pop(uid, None)
         text = await main_menu_text()
         await query.message.edit_text(
             text, parse_mode="Markdown", reply_markup=main_menu_keyboard()
@@ -575,7 +574,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     InlineKeyboardButton("⏭ Skip", callback_data="skip_caption")
                 ]])
             )
-            context.user_data["state"] = "wait_caption"
+            user_state[uid] = "wait_caption"
         return
 
     # ── TikTok privacy choice ─────────────────────────────────────────────
@@ -596,7 +595,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("⏭ Skip", callback_data="skip_caption")
             ]])
         )
-        context.user_data["state"] = "wait_caption"
+        user_state[uid] = "wait_caption"
         return
 
     # ── Skip caption ──────────────────────────────────────────────────────
@@ -613,7 +612,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("⏭ Skip", callback_data="skip_hashtags")
             ]])
         )
-        context.user_data["state"] = "wait_hashtags"
+        user_state[uid] = "wait_hashtags"
         return
 
     # ── Skip hashtags ─────────────────────────────────────────────────────
@@ -621,7 +620,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if uid not in user_post_data:
             user_post_data[uid] = {}
         user_post_data[uid]["hashtags"] = ""
-        context.user_data["state"] = None
+        user_state.pop(uid, None)
         await query.message.delete()
         await show_confirm(query.message, uid)
         return
@@ -632,7 +631,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📝 Send new caption:\n(or `-` to clear)",
             reply_markup=back_keyboard()
         )
-        context.user_data["state"] = "wait_caption"
+        user_state[uid] = "wait_caption"
         return
 
     # ── Edit hashtags ─────────────────────────────────────────────────────
@@ -641,7 +640,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🏷 Send new hashtags:\n(or `-` to clear)",
             reply_markup=back_keyboard()
         )
-        context.user_data["state"] = "wait_hashtags"
+        user_state[uid] = "wait_hashtags"
         return
 
     # ── CONFIRM & POST ────────────────────────────────────────────────────
@@ -776,6 +775,7 @@ def _cleanup(uid: int):
     user_links.pop(uid, None)
     user_videos.pop(uid, None)
     user_post_data.pop(uid, None)
+    user_state.pop(uid, None)
 
 
 # ══════════════════════════════════════════
