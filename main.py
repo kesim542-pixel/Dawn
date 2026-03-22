@@ -900,7 +900,7 @@ async def main():
         },
         fallbacks=[
             CommandHandler("cancel", auth_cancel),
-            CallbackQueryHandler(auth_cancel, pattern="^auth_cancel$", per_message=False),
+            CallbackQueryHandler(auth_cancel, pattern="^auth_cancel$"),
         ],
     )
 
