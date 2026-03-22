@@ -184,7 +184,6 @@ async def guard(update: Update) -> bool:
 
 def main_menu_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📱 Open Mini App", web_app=WebAppInfo(url=os.getenv("MINIAPP_URL","https://kesim542-pixel.github.io/dawn-miniapp/")))],
         [InlineKeyboardButton("⬇️ Download Video", callback_data="menu_download")],
         [InlineKeyboardButton("🎵 Post to TikTok", callback_data="menu_tiktok")],
         [InlineKeyboardButton("📊 Stats",          callback_data="menu_stats"),
@@ -192,6 +191,14 @@ def main_menu_keyboard():
         [InlineKeyboardButton("🤖 AI Settings",    callback_data="menu_ai_settings"),
          InlineKeyboardButton("ℹ️ Help",           callback_data="menu_help")],
     ])
+
+def main_menu_with_app_keyboard():
+    """Keyboard with WebApp button - must use ReplyKeyboardMarkup"""
+    from telegram import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo as _WAI
+    return ReplyKeyboardMarkup([
+        [KeyboardButton("📱 Open Dawn Mini App",
+                        web_app=_WAI(url=os.getenv("MINIAPP_URL","https://kesim542-pixel.github.io/dawn-miniapp/")))],
+    ], resize_keyboard=True, one_time_keyboard=False)
 
 def download_options_keyboard():
     return InlineKeyboardMarkup([
@@ -306,6 +313,12 @@ HELP_TEXT = (
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update): return
     text = await main_menu_text()
+    # Send reply keyboard with Mini App button first
+    await update.message.reply_text(
+        "📱 Tap the button below to open Dawn Mini App:",
+        reply_markup=main_menu_with_app_keyboard()
+    )
+    # Then send inline menu
     await update.message.reply_text(
         text, parse_mode="Markdown", reply_markup=main_menu_keyboard()
     )
