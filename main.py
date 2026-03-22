@@ -584,6 +584,14 @@ async def handle_web_app_data_check(update: Update, context: ContextTypes.DEFAUL
     await handle_web_app_data(update, context)
 
 
+async def web_app_or_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Route: web app data → handle_web_app_data, normal text → receive_message"""
+    if update.message and update.message.web_app_data:
+        await handle_web_app_data(update, context)
+    else:
+        await receive_message(update, context)
+
+
 async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle data sent from Mini App via sendData()"""
     if not await guard(update): return
@@ -594,35 +602,68 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         action = data.get("action", "")
 
         if action == "download":
-            # Store link and settings from miniapp
             url = data.get("url", "")
             if not url:
-                await update.message.reply_text("❗ No URL received from Mini App.")
+                await update.message.reply_text(
+                    "❗ No URL received. Please paste the link in Mini App.",
+                    reply_markup=back_keyboard()
+                )
                 return
+
             user_links[uid] = url
             if uid not in user_post_data: user_post_data[uid] = {}
             user_post_data[uid]["wm"]      = "wm_on" if data.get("wm") == "on" else "wm_off"
             user_post_data[uid]["dest"]    = "dest_" + data.get("dest", "telegram")
             user_post_data[uid]["privacy"] = data.get("privacy", "SELF_ONLY")
 
+            # Acknowledge receipt
+            wm_txt   = "✅ With Watermark" if data.get("wm")=="on" else "❌ No Watermark"
+            dest_map = {"telegram":"📢 Telegram","tiktok":"🎵 TikTok","both":"📢+🎵 Both"}
+            dest_txt = dest_map.get(data.get("dest","telegram"), "📢 Telegram")
+
             cap_mode = data.get("caption_mode", "skip")
             if cap_mode == "manual":
                 user_post_data[uid]["caption"]  = data.get("caption", "")
                 user_post_data[uid]["hashtags"] = data.get("hashtags", "")
+                await update.message.reply_text(
+                    f"📱 *Request received from Mini App!*\n\n"
+                    f"🔗 URL: `{url[:50]}...`\n"
+                    f"🖊 {wm_txt}\n"
+                    f"📍 {dest_txt}\n\n"
+                    "⬇️ Processing...",
+                    parse_mode="Markdown"
+                )
                 await show_confirm(update.message, uid)
+
             elif cap_mode == "ai":
                 topic    = data.get("topic", "viral video")
                 dest     = user_post_data[uid].get("dest", "dest_telegram")
                 platform = "tiktok" if dest=="dest_tiktok" else "both" if dest=="dest_both" else "telegram"
-                gen_msg  = await update.message.reply_text(
+                await update.message.reply_text(
+                    f"📱 *Request received from Mini App!*\n\n"
+                    f"🔗 URL: `{url[:50]}...`\n"
+                    f"🖊 {wm_txt}\n"
+                    f"📍 {dest_txt}\n"
+                    f"🤖 Generating AI caption for: *{topic}*",
+                    parse_mode="Markdown"
+                )
+                gen_msg = await update.message.reply_text(
                     "🤖 *Generating viral content...*\n\n⏳ Please wait...",
                     parse_mode="Markdown"
                 )
                 user_post_data[uid]["ai_topic"] = topic
                 await do_ai_generate(gen_msg, uid, topic, platform)
+
             else:
                 user_post_data[uid]["caption"]  = ""
                 user_post_data[uid]["hashtags"] = ""
+                await update.message.reply_text(
+                    f"📱 *Request received from Mini App!*\n\n"
+                    f"🔗 URL: `{url[:50]}...`\n"
+                    f"🖊 {wm_txt}\n"
+                    f"📍 {dest_txt}",
+                    parse_mode="Markdown"
+                )
                 await show_confirm(update.message, uid)
 
         elif action == "post_file":
@@ -1354,14 +1395,14 @@ async def main():
         ],
     )
 
+    # Web App data MUST be first handler
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, web_app_or_text), group=0)
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("testai", testai_command))
     app.add_handler(auth_conv)
     app.add_handler(CallbackQueryHandler(handle_callback))
-    app.add_handler(MessageHandler(filters.ALL, handle_web_app_data_check))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, receive_video))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_message))
 
     await app.initialize()
     # Kill any existing connections first
