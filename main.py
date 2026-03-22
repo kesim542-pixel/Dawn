@@ -434,10 +434,14 @@ async def auth_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def do_ai_generate(message, uid: int, topic: str, platform: str = "both"):
     try:
-        result   = await generate_full_post(
-            answers=f"The video is about: {topic}",
-            platform=platform,
-            language="English"
+        # Hard 25 second timeout — won't get stuck forever
+        result = await asyncio.wait_for(
+            generate_full_post(
+                answers=f"The video is about: {topic}",
+                platform=platform,
+                language="English"
+            ),
+            timeout=25
         )
         caption  = result.get("caption",  "")
         hashtags = result.get("hashtags", "")
@@ -457,11 +461,26 @@ async def do_ai_generate(message, uid: int, topic: str, platform: str = "both"):
             parse_mode="Markdown",
             reply_markup=ai_result_keyboard()
         )
-    except Exception as e:
+    except asyncio.TimeoutError:
         await message.edit_text(
-            f"❌ *AI failed:*\n{e}\n\nWrite your own caption instead.",
+            "⏱ *AI timed out.*\n\n"
+            "Gemini is slow right now.\n"
+            "Try again or write your own caption.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Try Again",    callback_data="ai_regen")],
+                [InlineKeyboardButton("✏️ Write My Own", callback_data="manual_caption")],
+                [InlineKeyboardButton("⏭ Skip Both",    callback_data="skip_all")],
+            ])
+        )
+    except Exception as e:
+        err = str(e)[:300]
+        await message.edit_text(
+            f"❌ *AI failed:*\n{err}\n\n"
+            "Check GEMINI_API_KEY in Railway vars.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Try Again",    callback_data="ai_regen")],
                 [InlineKeyboardButton("✏️ Write My Own", callback_data="manual_caption")],
                 [InlineKeyboardButton("⏭ Skip Both",    callback_data="skip_all")],
             ])
