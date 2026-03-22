@@ -291,6 +291,33 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update): return
     await show_stats(update.message)
 
+async def testai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Test Gemini API and show exact error"""
+    if not await guard(update): return
+    msg = await update.message.reply_text("🔄 Testing Gemini API...")
+    try:
+        import httpx as _httpx
+        api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            await msg.edit_text("❌ GEMINI_API_KEY is not set in Railway variables!")
+            return
+        await msg.edit_text(f"🔑 Key found: {api_key[:8]}...{api_key[-4:]}\n⏳ Calling API...")
+        async with _httpx.AsyncClient(timeout=15) as http:
+            resp = await http.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-001:generateContent?key={api_key}",
+                json={"contents": [{"parts": [{"text": "Say hello"}]}]}
+            )
+        data = resp.json()
+        if "candidates" in data:
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            await msg.edit_text(f"✅ Gemini works!\n\nResponse: {text[:100]}")
+        elif "error" in data:
+            await msg.edit_text(f"❌ API Error:\n{data['error'].get('message','Unknown')}")
+        else:
+            await msg.edit_text(f"⚠️ Unexpected response:\n{str(data)[:200]}")
+    except Exception as e:
+        await msg.edit_text(f"❌ Exception:\n{str(e)[:300]}")
+
 async def show_stats(message):
     authorized        = await client.is_user_authorized()
     total, used, free = shutil.disk_usage("/")
@@ -1163,6 +1190,7 @@ async def main():
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("testai", testai_command))
     app.add_handler(auth_conv)
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, receive_video))
