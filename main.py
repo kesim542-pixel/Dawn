@@ -3,11 +3,13 @@ import asyncio
 import base64
 import shutil
 import threading
+import time
 import re as _re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, MessageHandler, CallbackQueryHandler,
-    CommandHandler, ConversationHandler, filters, ContextTypes
+    CommandHandler, ConversationHandler, filters, ContextTypes,
+    Application
 )
 from downloader import download_video
 from watermark import add_watermark, get_thumbnail_only
@@ -34,7 +36,7 @@ if session_b64:
         f.write(base64.b64decode(session_b64))
 
 client = TelegramClient("session", API_ID, API_HASH)
-bot_app = None  # set in main()
+bot_app = None
 
 WAIT_PHONE = 1
 WAIT_OTP   = 2
@@ -70,9 +72,7 @@ async def guard(update: Update) -> bool:
     banned_users.add(uid)
     try:
         await update.effective_message.reply_text(
-            "🚫 *Access Denied.*\n\n"
-            "This is a private bot.\n"
-            "You have been banned automatically.",
+            "🚫 *Access Denied.*\n\nThis is a private bot.\nYou have been banned automatically.",
             parse_mode="Markdown"
         )
     except Exception:
@@ -109,13 +109,11 @@ def post_destination_keyboard():
     ])
 
 def tiktok_privacy_keyboard():
-    # In sandbox mode only SELF_ONLY works
-    # All options shown but code forces private until app approved
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌍 Public (needs approval)",  callback_data="tt_pub")],
-        [InlineKeyboardButton("👥 Friends Only",             callback_data="tt_friends")],
-        [InlineKeyboardButton("🔒 Private ✅ (works now)",   callback_data="tt_private")],
-        [InlineKeyboardButton("🔙 Back",                     callback_data="menu_back")],
+        [InlineKeyboardButton("🌍 Public (after approval)", callback_data="tt_pub")],
+        [InlineKeyboardButton("👥 Friends Only",            callback_data="tt_friends")],
+        [InlineKeyboardButton("🔒 Private ✅ (works now)",  callback_data="tt_private")],
+        [InlineKeyboardButton("🔙 Back",                    callback_data="menu_back")],
     ])
 
 def caption_choice_keyboard():
@@ -137,10 +135,10 @@ def ai_result_keyboard():
 
 def confirm_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Confirm & Post", callback_data="confirm_post")],
-        [InlineKeyboardButton("✏️ Edit Caption",   callback_data="ai_edit_caption")],
-        [InlineKeyboardButton("✏️ Edit Hashtags",  callback_data="ai_edit_hashtags")],
-        [InlineKeyboardButton("❌ Cancel",          callback_data="menu_back")],
+        [InlineKeyboardButton("✅ Confirm & Post",  callback_data="confirm_post")],
+        [InlineKeyboardButton("✏️ Edit Caption",    callback_data="ai_edit_caption")],
+        [InlineKeyboardButton("✏️ Edit Hashtags",   callback_data="ai_edit_hashtags")],
+        [InlineKeyboardButton("❌ Cancel",           callback_data="menu_back")],
     ])
 
 def back_keyboard():
@@ -181,8 +179,7 @@ HELP_TEXT = (
     "🤖 *AI Features:*\n"
     "• Auto viral caption (150-300 words)\n"
     "• Auto viral hashtags (20 tags)\n"
-    "• Regenerate until perfect\n"
-    "• Edit any part manually\n\n"
+    "• Regenerate until perfect\n\n"
     "📥 *Supported sources:*\n"
     "• 🎵 TikTok • 📸 Instagram\n"
     "• ▶️ YouTube • 🐦 Twitter/X\n"
@@ -214,7 +211,6 @@ async def show_stats(message):
     proxy_status      = f"✅ `{proxy_display}`" if proxy else "⚠️ Not set"
     tokens            = get_tokens()
     gemini            = bool(os.getenv("GEMINI_API_KEY"))
-
     await message.reply_text(
         "📊 *Bot Statistics*\n"
         "━━━━━━━━━━━━━━━━━━\n"
@@ -336,29 +332,25 @@ async def auth_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════
-#  AI GENERATE HELPER
+#  AI GENERATE
 # ══════════════════════════════════════════
 
 async def do_ai_generate(message, uid: int, topic: str, platform: str = "both"):
-    """Call Gemini and display result with action buttons."""
     try:
         result   = await generate_full_post(
             answers=f"The video is about: {topic}",
             platform=platform,
             language="English"
         )
-        caption  = result.get("caption", "")
+        caption  = result.get("caption",  "")
         hashtags = result.get("hashtags", "")
-
         if uid not in user_post_data:
             user_post_data[uid] = {}
         user_post_data[uid]["caption"]  = caption
         user_post_data[uid]["hashtags"] = hashtags
         user_post_data[uid]["ai_topic"] = topic
-
         cap_prev  = caption[:250]  + ("..." if len(caption)  > 250 else "")
         hash_prev = hashtags[:150] + ("..." if len(hashtags) > 150 else "")
-
         await message.edit_text(
             "🤖 *AI Generated Content*\n"
             "━━━━━━━━━━━━━━━━━━\n"
@@ -389,8 +381,7 @@ async def show_confirm(message, uid: int):
     hashtags = data.get("hashtags", "") or "_(no hashtags)_"
     dest     = data.get("dest",     "dest_telegram")
     wm       = data.get("wm",       "wm_off")
-    privacy  = data.get("privacy",  "PUBLIC_TO_EVERYONE")
-
+    privacy  = data.get("privacy",  "SELF_ONLY")
     dest_label    = {"dest_telegram": "📢 Telegram",
                      "dest_tiktok"  : "🎵 TikTok",
                      "dest_both"    : "📢 + 🎵 Both"}.get(dest, dest)
@@ -398,9 +389,8 @@ async def show_confirm(message, uid: int):
     privacy_label = {"PUBLIC_TO_EVERYONE": "🌍 Public",
                      "FRIEND_ONLY"       : "👥 Friends",
                      "SELF_ONLY"         : "🔒 Private"}.get(privacy, privacy)
-    cap_prev      = caption[:150] + ("..." if len(caption) > 150 else "")
-    hash_prev     = hashtags[:100] + ("..." if len(hashtags) > 100 else "")
-
+    cap_prev  = caption[:150]  + ("..." if len(caption)  > 150 else "")
+    hash_prev = hashtags[:100] + ("..." if len(hashtags) > 100 else "")
     await message.reply_text(
         "📋 *Post Preview — Confirm*\n"
         "━━━━━━━━━━━━━━━━━━\n"
@@ -421,20 +411,16 @@ async def show_confirm(message, uid: int):
 
 async def receive_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update): return
-
     uid  = update.effective_user.id
     text = (update.message.text or "").strip()
 
-    # ── AI topic waiting ──────────────────────────────────────────────────
     if user_state.get(uid) == "wait_ai_topic":
         user_state.pop(uid, None)
-        if uid not in user_post_data:
-            user_post_data[uid] = {}
+        if uid not in user_post_data: user_post_data[uid] = {}
         user_post_data[uid]["ai_topic"] = text
         dest     = user_post_data[uid].get("dest", "dest_telegram")
         platform = ("tiktok" if dest == "dest_tiktok"
-                    else "both" if dest == "dest_both"
-                    else "telegram")
+                    else "both" if dest == "dest_both" else "telegram")
         gen_msg  = await update.message.reply_text(
             "🤖 *Generating viral content...*\n\n⏳ Please wait...",
             parse_mode="Markdown"
@@ -442,16 +428,12 @@ async def receive_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await do_ai_generate(gen_msg, uid, text, platform)
         return
 
-    # ── Caption waiting ───────────────────────────────────────────────────
     if user_state.get(uid) == "wait_caption":
         user_state.pop(uid, None)
-        if uid not in user_post_data:
-            user_post_data[uid] = {}
+        if uid not in user_post_data: user_post_data[uid] = {}
         user_post_data[uid]["caption"] = "" if text == "-" else text
         await update.message.reply_text(
-            "🏷 *Send hashtags* for your post:\n\n"
-            "Example: `#Ethiopia #Music #Viral`\n\n"
-            "Or send `-` to skip",
+            "🏷 *Send hashtags* for your post:\n\nExample: `#Ethiopia #Music #Viral`\n\nOr send `-` to skip",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("⏭ Skip", callback_data="skip_hashtags")
@@ -460,11 +442,9 @@ async def receive_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_state[uid] = "wait_hashtags"
         return
 
-    # ── Hashtags waiting ──────────────────────────────────────────────────
     if user_state.get(uid) == "wait_hashtags":
         user_state.pop(uid, None)
-        if uid not in user_post_data:
-            user_post_data[uid] = {}
+        if uid not in user_post_data: user_post_data[uid] = {}
         user_post_data[uid]["hashtags"] = "" if text == "-" else text
         await show_confirm(update.message, uid)
         return
@@ -497,23 +477,9 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video = update.message.video or update.message.document
     if not video: return
     user_videos[uid] = {"file_id": video.file_id}
-    tokens = get_tokens()
-    if not tokens.get(str(uid)):
-        await update.message.reply_text(
-            "🎵 *Post this video to TikTok*\n\nFirst connect your account:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔗 Login with TikTok", url=get_auth_url(uid))],
-                [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")]
-            ])
-        )
-        return
-    # Set defaults for video post
-    if uid not in user_post_data:
-        user_post_data[uid] = {}
+    if uid not in user_post_data: user_post_data[uid] = {}
     user_post_data[uid].setdefault("wm",   "wm_off")
     user_post_data[uid].setdefault("dest", "dest_telegram")
-
     await update.message.reply_text(
         "📹 *Video received!*\n\nWhere do you want to post it?",
         parse_mode="Markdown",
@@ -527,13 +493,11 @@ async def receive_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update): return
-
     query = update.callback_query
     await query.answer()
     data  = query.data
     uid   = query.from_user.id
 
-    # ── Navigation ─────────────────────────────────────────────────────────
     if data == "menu_back":
         user_state.pop(uid, None)
         text = await main_menu_text()
@@ -587,8 +551,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await query.message.edit_text(
-                "🎵 *TikTok Connected!*\n\n"
-                "Send a video file or link\nand choose TikTok as destination.",
+                "🎵 *TikTok Connected!*\n\nSend a video file or link.",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔄 Reconnect", url=get_auth_url(uid))],
@@ -597,7 +560,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    # ── Watermark ──────────────────────────────────────────────────────────
     if data in ("wm_on", "wm_off"):
         if uid not in user_post_data: user_post_data[uid] = {}
         user_post_data[uid]["wm"] = data
@@ -612,7 +574,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Destination ────────────────────────────────────────────────────────
     if data in ("dest_telegram", "dest_tiktok", "dest_both"):
         if uid not in user_post_data: user_post_data[uid] = {}
         user_post_data[uid]["dest"] = data
@@ -629,8 +590,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    # ── TikTok Privacy ─────────────────────────────────────────────────────
-    privacy_map = {"tt_pub": "PUBLIC_TO_EVERYONE", "tt_friends": "FRIEND_ONLY", "tt_private": "SELF_ONLY"}
+    privacy_map = {
+        "tt_pub"    : "PUBLIC_TO_EVERYONE",
+        "tt_friends": "FRIEND_ONLY",
+        "tt_private": "SELF_ONLY"
+    }
     if data in privacy_map:
         if uid not in user_post_data: user_post_data[uid] = {}
         user_post_data[uid]["privacy"] = privacy_map[data]
@@ -641,20 +605,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── AI Generate ────────────────────────────────────────────────────────
     if data == "ai_generate":
         await query.message.edit_text(
-            "🤖 *AI Viral Content Generator*\n\n"
-            "What is this video about?\n\n"
-            "Examples:\n"
-            "• Forex trading tips\n"
-            "• Ethiopian music video\n"
-            "• Funny moments compilation\n\n"
-            "Send a short description:",
+            "🤖 *AI Viral Content Generator*\n\nWhat is this video about?\n\n"
+            "Examples:\n• Forex trading tips\n• Ethiopian music video\n• Funny compilation\n\nSend a short description:",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Back", callback_data="menu_back")
-            ]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="menu_back")]])
         )
         user_state[uid] = "wait_ai_topic"
         return
@@ -662,13 +618,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "ai_regen":
         topic    = user_post_data.get(uid, {}).get("ai_topic", "viral video")
         dest     = user_post_data.get(uid, {}).get("dest", "dest_telegram")
-        platform = ("tiktok" if dest == "dest_tiktok"
-                    else "both" if dest == "dest_both"
-                    else "telegram")
-        await query.message.edit_text(
-            "🔄 *Regenerating...*\n\n⏳ Please wait...",
-            parse_mode="Markdown"
-        )
+        platform = "tiktok" if dest == "dest_tiktok" else "both" if dest == "dest_both" else "telegram"
+        await query.message.edit_text("🔄 *Regenerating...*\n\n⏳ Please wait...", parse_mode="Markdown")
         await do_ai_generate(query.message, uid, topic, platform)
         return
 
@@ -692,14 +643,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_state[uid] = "wait_hashtags"
         return
 
-    # ── Manual caption ─────────────────────────────────────────────────────
     if data == "manual_caption":
         await query.message.edit_text(
             "📝 *Send your caption:*\nOr `-` to skip",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⏭ Skip", callback_data="skip_caption")
-            ]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏭ Skip", callback_data="skip_caption")]])
         )
         user_state[uid] = "wait_caption"
         return
@@ -710,9 +658,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(
             "🏷 *Send hashtags:*\nExample: `#Ethiopia #Music #Viral`\nOr `-` to skip",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⏭ Skip", callback_data="skip_hashtags")
-            ]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏭ Skip", callback_data="skip_hashtags")]])
         )
         user_state[uid] = "wait_hashtags"
         return
@@ -732,7 +678,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_confirm(query.message, uid)
         return
 
-    # ── Confirm & Post ─────────────────────────────────────────────────────
     if data == "confirm_post":
         await process_and_post(query.message, uid)
         return
@@ -744,13 +689,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_and_post(message, uid: int):
     link     = user_links.get(uid)
-    video_tg = user_videos.get(uid)   # direct video file sent to bot
+    video_tg = user_videos.get(uid)
     post     = user_post_data.get(uid, {})
     wm       = post.get("wm",       "wm_off")
     dest     = post.get("dest",     "dest_telegram")
     caption  = post.get("caption",  "")
     hashtags = post.get("hashtags", "")
-    privacy  = post.get("privacy",  "PUBLIC_TO_EVERYONE")
+    privacy  = post.get("privacy",  "SELF_ONLY")
 
     full_caption = caption
     if hashtags:
@@ -760,8 +705,8 @@ async def process_and_post(message, uid: int):
     file  = None
     thumb = None
 
+    # Step 1: Get video
     if video_tg and video_tg.get("file_id"):
-        # ── User sent a video file directly ──────────────────────────────
         dl_prog = ProgressMessage(message, "⬇️ Saving video")
         await dl_prog.start()
         try:
@@ -773,9 +718,7 @@ async def process_and_post(message, uid: int):
             await dl_prog.error(f"Failed to get video: {e}")
             _cleanup(uid)
             return
-
     elif link:
-        # ── User sent a URL link ──────────────────────────────────────────
         dl_prog = ProgressMessage(message, "⬇️ Downloading")
         await dl_prog.start()
         try:
@@ -787,12 +730,8 @@ async def process_and_post(message, uid: int):
             await dl_prog.error(str(e))
             _cleanup(uid)
             return
-
     else:
-        await message.reply_text(
-            "❗ No video or link found. Please send a link or video file.",
-            reply_markup=back_keyboard()
-        )
+        await message.reply_text("❗ No video or link found.", reply_markup=back_keyboard())
         return
 
     # Step 2: Watermark
@@ -878,16 +817,16 @@ def _cleanup(uid: int):
 # ══════════════════════════════════════════
 
 async def main():
-    # Start web server FIRST — Railway needs it to respond before bot starts
-    import time
+    global bot_app
+
+    # Start web server FIRST
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
-    time.sleep(2)  # Give server time to bind to port
+    time.sleep(2)
     print(f"✅ Web server started on port {os.getenv('PORT', 8000)}")
 
     await client.connect()
 
-    global bot_app
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     bot_app = app
 
@@ -912,13 +851,20 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_message))
 
     await app.initialize()
-    # Clear any existing webhook or polling conflicts
-    await app.bot.delete_webhook(drop_pending_updates=True)
-    await asyncio.sleep(1)  # Wait for conflict to clear
+    # Kill any existing connections first
+    try:
+        await app.bot.delete_webhook(drop_pending_updates=True)
+    except Exception:
+        pass
+    await asyncio.sleep(3)  # Wait for old instance to die
     await app.start()
     await app.updater.start_polling(
         drop_pending_updates=True,
-        allowed_updates=["message", "callback_query"]
+        allowed_updates=["message", "callback_query"],
+        read_timeout=10,
+        write_timeout=10,
+        connect_timeout=10,
+        pool_timeout=10,
     )
 
     print("✅ Bot is running...")
