@@ -217,9 +217,9 @@ def post_destination_keyboard():
 
 def tiktok_privacy_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌍 Public (after approval)", callback_data="tt_pub")],
+        [InlineKeyboardButton("🌍 Public )", callback_data="tt_pub")],
         [InlineKeyboardButton("👥 Friends Only",            callback_data="tt_friends")],
-        [InlineKeyboardButton("🔒 Private ✅ (works now)",  callback_data="tt_private")],
+        [InlineKeyboardButton("🔒 Private ✅ ",  callback_data="tt_private")],
         [InlineKeyboardButton("🔙 Back",                    callback_data="menu_back")],
     ])
 
