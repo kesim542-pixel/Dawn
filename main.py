@@ -217,10 +217,10 @@ def post_destination_keyboard():
 
 def tiktok_privacy_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌍 Public )", callback_data="tt_pub")],
-        [InlineKeyboardButton("👥 Friends Only",            callback_data="tt_friends")],
-        [InlineKeyboardButton("🔒 Private ✅ ",  callback_data="tt_private")],
-        [InlineKeyboardButton("🔙 Back",                    callback_data="menu_back")],
+        [InlineKeyboardButton("🌍 Public ✅",    callback_data="tt_pub")],
+        [InlineKeyboardButton("👥 Friends Only", callback_data="tt_friends")],
+        [InlineKeyboardButton("🔒 Private",      callback_data="tt_private")],
+        [InlineKeyboardButton("🔙 Back",         callback_data="menu_back")],
     ])
 
 def caption_choice_keyboard():
@@ -591,24 +591,23 @@ async def show_confirm(message, uid: int):
 # ══════════════════════════════════════════
 
 async def handle_web_app_data_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Wrapper to check if message has web_app_data"""
-    if not update.message or not update.message.web_app_data:
+    """Handle web_app_data sent from Mini App"""
+    if not update.message:
+        return
+    if not update.message.web_app_data:
         return
     await handle_web_app_data(update, context)
-
-
-async def web_app_or_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Route: web app data → handle_web_app_data, normal text → receive_message"""
-    if update.message and update.message.web_app_data:
-        await handle_web_app_data(update, context)
-    else:
-        await receive_message(update, context)
 
 
 async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle data sent from Mini App via sendData()"""
     if not await guard(update): return
     uid  = update.effective_user.id
+    # Acknowledge receipt immediately
+    await update.message.reply_text(
+        "📱 *Mini App data received!* Processing...",
+        parse_mode="Markdown"
+    )
     try:
         import json as _json
         data = _json.loads(update.message.web_app_data.data)
@@ -1411,12 +1410,12 @@ async def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("testai", testai_command))
-    # Auth conversation MUST be before web_app handler
     app.add_handler(auth_conv)
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, receive_video))
-    # Web App data handler - catches text + web_app_data
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, web_app_or_text))
+    # IMPORTANT: web_app_data is a separate filter - not TEXT
+    app.add_handler(MessageHandler(filters.StatusUpdate.ALL, handle_web_app_data_check))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_message))
 
     await app.initialize()
     # Kill any existing connections first
