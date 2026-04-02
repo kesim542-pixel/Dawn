@@ -1,6 +1,6 @@
 """
 TikTok OAuth + Video Posting
-Uses TikTok Content Posting API v2
+App is APPROVED - public posting enabled!
 """
 import os
 import httpx
@@ -41,55 +41,17 @@ async def exchange_code(code: str) -> dict:
     return resp.json()
 
 
-async def get_user_info(access_token: str) -> dict:
-    async with httpx.AsyncClient() as http:
-        resp = await http.get(
-            "https://open.tiktokapis.com/v2/user/info/"
-            "?fields=open_id,avatar_url,display_name,username",
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=30
-        )
-    return resp.json()
-
-
 async def post_video(
     access_token: str,
     video_path: str,
     caption: str = "",
-    privacy: str = "SELF_ONLY"   # Always SELF_ONLY until app approved
+    privacy: str = "PUBLIC_TO_EVERYONE"  # ✅ App approved — public posting!
 ) -> dict:
     """
     Upload and post video to TikTok.
-    NOTE: Sandbox mode ONLY supports SELF_ONLY (private) posting.
-    After TikTok approves your app, change privacy to PUBLIC_TO_EVERYONE.
+    App is APPROVED - supports PUBLIC_TO_EVERYONE posting!
     """
-
     file_size = os.path.getsize(video_path)
-
-    # Check creator info first to get allowed privacy options
-    async with httpx.AsyncClient() as http:
-        creator_resp = await http.post(
-            "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type" : "application/json; charset=UTF-8"
-            },
-            timeout=30
-        )
-    creator_data = creator_resp.json()
-
-    # Use allowed privacy level from creator info if available
-    allowed_privacy = "SELF_ONLY"  # default safe value
-    try:
-        privacy_options = (
-            creator_data.get("data", {})
-            .get("privacy_level_options", [])
-        )
-        if privacy_options:
-            # Use first available option (most permissive the account allows)
-            allowed_privacy = privacy_options[0]
-    except Exception:
-        pass
 
     # Step 1: Init upload
     async with httpx.AsyncClient() as http:
@@ -98,7 +60,7 @@ async def post_video(
             json={
                 "post_info": {
                     "title"          : caption[:150] if caption else "New video",
-                    "privacy_level"  : allowed_privacy,
+                    "privacy_level"  : privacy,
                     "disable_duet"   : False,
                     "disable_comment": False,
                     "disable_stitch" : False,
@@ -125,7 +87,7 @@ async def post_video(
     upload_url = init_data["data"]["upload_url"]
     publish_id = init_data["data"]["publish_id"]
 
-    # Step 2: Upload video bytes
+    # Step 2: Upload video
     with open(video_path, "rb") as vf:
         video_bytes = vf.read()
 
@@ -148,6 +110,7 @@ async def post_video(
         )
 
     # Step 3: Check status
+    await __import__('asyncio').sleep(2)
     async with httpx.AsyncClient() as http:
         status_resp = await http.post(
             "https://open.tiktokapis.com/v2/post/publish/status/fetch/",
@@ -160,7 +123,7 @@ async def post_video(
         )
 
     return {
-        "publish_id"    : publish_id,
-        "privacy_used"  : allowed_privacy,
-        "status"        : status_resp.json()
+        "publish_id"  : publish_id,
+        "privacy"     : privacy,
+        "status"      : status_resp.json()
     }
