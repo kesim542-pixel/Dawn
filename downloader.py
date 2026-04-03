@@ -95,6 +95,7 @@ def try_download_with_proxy(link: str, out: str, proxy: str,
         "merge_output_format": "mp4",
         "progress_hooks"     : [_hook],
         "proxy"              : proxy,
+        "cookiefile"         : "cookies.txt" if os.path.exists("cookies.txt") else None,
         "socket_timeout"     : 15,
         "http_headers"       : {
             "User-Agent": (
@@ -151,6 +152,7 @@ def download_with_ytdlp(link: str, out: str = "video.mp4",
             "format"             : "mp4/bestvideo+bestaudio/best",
             "merge_output_format": "mp4",
             "progress_hooks"     : [_hook],
+            "cookiefile"         : "cookies.txt" if os.path.exists("cookies.txt") else None,
             "http_headers"       : {
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -296,3 +298,4 @@ async def download_video(link: str, client: TelegramClient,
                 "❌ Unsupported link.\nSupported: TikTok, Instagram, "
                 "YouTube, Twitter/X, Facebook, Reddit, Telegram"
             )
+
