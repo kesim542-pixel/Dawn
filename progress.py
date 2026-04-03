@@ -1,10 +1,5 @@
-"""
-Progress bar with download/upload speed display.
-Shows: bar + % + speed (KB/s or MB/s) + ETA + elapsed + size
-"""
-import asyncio
+# progress.py – Fixed live speed calculation
 import time
-
 
 class ProgressMessage:
     def __init__(self, message, title: str = "Processing"):
@@ -15,8 +10,7 @@ class ProgressMessage:
         self._last_edit = 0
         self._last_pct = -1
         self._done = False
-
-        # Internal tracking for live speed calculation
+        # Internal speed tracking
         self._last_downloaded = 0.0
         self._last_speed_time = 0.0
         self._current_speed = 0.0
@@ -36,23 +30,19 @@ class ProgressMessage:
                      downloaded: float = 0, total: float = 0):
         if self._done:
             return
-
         now = time.time()
 
-        # --- Live speed calculation (overwrites the passed 'speed' argument) ---
+        # --- Live speed calculation (ignores passed 'speed') ---
         if downloaded > self._last_downloaded and self._last_speed_time > 0:
             delta_bytes = downloaded - self._last_downloaded
             delta_time = now - self._last_speed_time
             if delta_time > 0:
                 self._current_speed = delta_bytes / delta_time
-        # Update tracking values for next call
         self._last_downloaded = downloaded
         self._last_speed_time = now
-
-        # Use the internally calculated speed
         live_speed = self._current_speed
 
-        # --- Throttling: edit at most every 2 seconds and when % changes by at least 1% ---
+        # Throttle edits to avoid flooding
         if now - self._last_edit < 2.0:
             return
         if abs(pct - self._last_pct) < 1.0 and pct < 99:
@@ -63,14 +53,12 @@ class ProgressMessage:
 
         elapsed = int(now - self._start)
         e_str = f"{elapsed//60:02d}:{elapsed%60:02d}"
-
-        # Progress bar
         filled = int(pct / 10)
         bar = "▰" * filled + "▱" * (10 - filled)
 
-        # Speed display (using live_speed)
+        # Format speed
         if live_speed > 0:
-            if live_speed >= 1024 * 1024:
+            if live_speed >= 1024*1024:
                 spd_str = f"{live_speed/1024/1024:.1f} MB/s"
             elif live_speed >= 1024:
                 spd_str = f"{live_speed/1024:.0f} KB/s"
@@ -86,15 +74,13 @@ class ProgressMessage:
         else:
             eta_str = "--"
 
-        # Size display
+        # Size line
         if total > 0:
             dl_mb = downloaded / 1024 / 1024
             total_mb = total / 1024 / 1024
-            size_str = f"{dl_mb:.1f}/{total_mb:.1f} MB"
+            size_line = f"💾 Size  : {dl_mb:.1f}/{total_mb:.1f} MB\n"
         else:
-            size_str = ""
-
-        size_line = f"💾 Size  : {size_str}\n" if size_str else ""
+            size_line = ""
 
         text = (
             f"⏳ *{self.title}*\n\n"
@@ -104,7 +90,6 @@ class ProgressMessage:
             f"⏱ Elapsed: {e_str}\n"
             f"{size_line}"
         )
-
         try:
             await self.msg.edit_text(text, parse_mode="Markdown")
         except Exception:
@@ -116,11 +101,7 @@ class ProgressMessage:
         self._done = True
         elapsed = int(time.time() - self._start)
         e_str = f"{elapsed//60:02d}:{elapsed%60:02d}"
-        text = (
-            f"✅ *{self.title} — Done!*\n\n"
-            f"▰▰▰▰▰▰▰▰▰▰ 100%\n"
-            f"⏱ Total time: {e_str}\n"
-        )
+        text = f"✅ *{self.title} — Done!*\n\n▰▰▰▰▰▰▰▰▰▰ 100%\n⏱ Total time: {e_str}\n"
         if extra:
             text += f"\n{extra}"
         try:
@@ -132,10 +113,7 @@ class ProgressMessage:
         if self._done:
             return
         self._done = True
-        text = (
-            f"❌ *{self.title} — Failed*\n\n"
-            f"{err}"
-        )
+        text = f"❌ *{self.title} — Failed*\n\n{err}"
         try:
             await self.msg.edit_text(text, parse_mode="Markdown")
         except Exception:
