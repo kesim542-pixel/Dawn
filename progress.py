@@ -1,116 +1,123 @@
+"""
+Progress bar with download/upload speed display.
+Shows: bar + % + speed (KB/s or MB/s) + ETA + elapsed + size
+"""
 import asyncio
 import time
-import math
 
-# ── Unicode block bar builder ─────────────────────────────────────────────
-BLOCKS = ["░", "▒", "▓", "█"]
-
-def make_bar(percent: float, width: int = 16) -> str:
-    filled     = int(percent / 100 * width)
-    remainder  = percent / 100 * width - filled
-    bar        = "█" * filled
-    if filled < width:
-        quarter = int(remainder * 4)
-        bar    += BLOCKS[quarter]
-        bar    += "░" * (width - filled - 1)
-    return bar
-
-def fmt_speed(bps: float) -> str:
-    if bps <= 0:
-        return "0 KB/s"
-    if bps >= 1_000_000:
-        return f"{bps/1_000_000:.1f} MB/s"
-    return f"{bps/1_000:.0f} KB/s"
-
-def fmt_eta(seconds: float) -> str:
-    if seconds <= 0 or math.isinf(seconds) or seconds > 36000:
-        return "--:--"
-    m, s = divmod(int(seconds), 60)
-    return f"{m:02d}:{s:02d}"
-
-def fmt_size(b: float) -> str:
-    if b >= 1_000_000_000:
-        return f"{b/1_000_000_000:.2f} GB"
-    if b >= 1_000_000:
-        return f"{b/1_000:.1f} MB"
-    return f"{b/1_000:.0f} KB"
-
-# ── Animated progress message ─────────────────────────────────────────────
 
 class ProgressMessage:
-    SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
     def __init__(self, message, title: str = "Processing"):
-        self.message    = message
-        self.title      = title
-        self.percent    = 0.0
-        self.speed_bps  = 0.0
-        self.downloaded = 0
-        self.total      = 0
-        self._msg       = None
-        self._task      = None
-        self._stopped   = False
-        self._spin_idx  = 0
-        self._start_ts  = time.time()
-
-    def _render(self) -> str:
-        bar     = make_bar(self.percent)
-        elapsed = time.time() - self._start_ts
-        
-        # ETA calculation based on real-time speed
-        if self.speed_bps > 0 and self.total > 0:
-            remaining = max(0, self.total - self.downloaded)
-            eta_val = remaining / self.speed_bps
-        else:
-            eta_val = 0
-
-        spin = self.SPINNER[self._spin_idx % len(self.SPINNER)]
-        self._spin_idx += 1
-
-        size_info = ""
-        if self.total > 0:
-            size_info = f"\n📦 `{fmt_size(self.downloaded)}` / `{fmt_size(self.total)}`"
-
-        return (
-            f"{spin} *{self.title}*\n\n"
-            f"`[{bar}]` {self.percent:.1f}%\n"
-            f"⚡ Speed : `{fmt_speed(self.speed_bps)}`\n"
-            f"⏱ ETA   : `{fmt_eta(eta_val)}`\n"
-            f"⏳ Elapsed: `{fmt_eta(elapsed)}`"
-            f"{size_info}"
-        )
+        self.message   = message
+        self.title     = title
+        self.msg       = None
+        self._start    = None
+        self._last_edit= 0
+        self._last_pct = -1
+        self._done     = False
 
     async def start(self):
-        self._msg = await self.message.reply_text(self._render(), parse_mode="Markdown")
-        self._task = asyncio.create_task(self._loop())
+        self._start = time.time()
+        self.msg = await self.message.reply_text(
+            f"⏳ *{self.title}*\n\n"
+            "▱▱▱▱▱▱▱▱▱▱ 0%\n"
+            "⚡ Speed : -- KB/s\n"
+            "🕐 ETA   : --\n"
+            "⏱ Elapsed: 00:00",
+            parse_mode="Markdown"
+        )
 
-    async def _loop(self):
-        while not self._stopped:
-            try:
-                await self._msg.edit_text(self._render(), parse_mode="Markdown")
-            except Exception: pass
-            await asyncio.sleep(2)
+    async def update(self, pct: float, speed: float = 0,
+                     downloaded: float = 0, total: float = 0):
+        if self._done:
+            return
 
-    async def update(self, percent: float, speed_bps: float = 0, downloaded: int = 0, total: int = 0):
-        self.percent    = min(percent, 99.9)
-        self.speed_bps  = speed_bps
-        self.downloaded = downloaded
-        self.total      = total
+        now = time.time()
+        # Edit max every 2 seconds to avoid Telegram flood
+        if now - self._last_edit < 2.0:
+            return
+        if abs(pct - self._last_pct) < 1.0 and pct < 99:
+            return
 
-    async def done(self, final_text: str):
-        self._stopped = True
-        if self._task: self._task.cancel()
-        elapsed = time.time() - self._start_ts
+        self._last_edit = now
+        self._last_pct  = pct
+
+        elapsed = int(now - self._start)
+        e_str   = f"{elapsed//60:02d}:{elapsed%60:02d}"
+
+        # Build bar
+        filled = int(pct / 10)
+        bar    = "▰" * filled + "▱" * (10 - filled)
+
+        # Speed display
+        if speed > 0:
+            if speed >= 1024 * 1024:
+                spd_str = f"{speed/1024/1024:.1f} MB/s"
+            elif speed >= 1024:
+                spd_str = f"{speed/1024:.0f} KB/s"
+            else:
+                spd_str = f"{speed:.0f} B/s"
+        else:
+            spd_str = "-- KB/s"
+
+        # ETA
+        if speed > 0 and total > downloaded > 0:
+            remaining = (total - downloaded) / speed
+            eta_str   = f"{int(remaining//60):02d}:{int(remaining%60):02d}"
+        else:
+            eta_str = "--"
+
+        # Size display
+        if total > 0:
+            dl_mb    = downloaded / 1024 / 1024
+            total_mb = total / 1024 / 1024
+            size_str = f"{dl_mb:.1f}/{total_mb:.1f} MB"
+        else:
+            size_str = ""
+
+        size_line = f"💾 Size  : {size_str}\n" if size_str else ""
+
+        text = (
+            f"⏳ *{self.title}*\n\n"
+            f"{bar} {pct:.0f}%\n"
+            f"⚡ Speed : {spd_str}\n"
+            f"🕐 ETA   : {eta_str}\n"
+            f"⏱ Elapsed: {e_str}\n"
+            f"{size_line}"
+        )
+
         try:
-            await self._msg.edit_text(
-                f"✅ *{self.title} — Done!*\n\n`[{'█' * 16}]` 100%\n⏱ Total: `{fmt_eta(elapsed)}`\n\n{final_text}",
-                parse_mode="Markdown"
-            )
-        except Exception: pass
+            await self.msg.edit_text(text, parse_mode="Markdown")
+        except Exception:
+            pass
 
-    async def error(self, error_text: str):
-        self._stopped = True
-        if self._task: self._task.cancel()
+    async def done(self, extra: str = ""):
+        if self._done:
+            return
+        self._done = True
+        elapsed = int(time.time() - self._start)
+        e_str   = f"{elapsed//60:02d}:{elapsed%60:02d}"
+        text = (
+            f"✅ *{self.title} — Done!*\n\n"
+            f"▰▰▰▰▰▰▰▰▰▰ 100%\n"
+            f"⏱ Total time: {e_str}\n"
+        )
+        if extra:
+            text += f"\n{extra}"
         try:
-            await self._msg.edit_text(f"❌ *{self.title} — Failed*\n\n{error_text}", parse_mode="Markdown")
-        except Exception: pass
+            await self.msg.edit_text(text, parse_mode="Markdown")
+        except Exception:
+            pass
+
+    async def error(self, err: str = ""):
+        if self._done:
+            return
+        self._done = True
+        text = (
+            f"❌ *{self.title} — Failed*\n\n"
+            f"{err}"
+        )
+        try:
+            await self.msg.edit_text(text, parse_mode="Markdown")
+        except Exception:
+            pass
