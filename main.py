@@ -34,8 +34,15 @@ load_dotenv()
 # ══════════════════════════════════════════
 #  ENCRYPTION SETUP (የኩኪ ደህንነት)
 # ══════════════════════════════════════════
-SECRET_KEY = os.getenv("SECRET_KEY", Fernet.generate_key().decode())
-cipher_suite = Fernet(SECRET_KEY.encode() if isinstance(SECRET_KEY, str) else SECRET_KEY)
+# መስመር 38 እና 39ን በዚህ ተካው (Replace lines 38-39 with this)
+SECRET_KEY = os.getenv("SECRET_KEY", "VkfX2NfT3pMNGVfU2VjcmV0S2V5XzEyMzQ1Njc4OQ==")
+try:
+    cipher_suite = Fernet(SECRET_KEY.encode())
+except Exception:
+    # ቁልፉ ከተሳሳተ በራሱ ትክክለኛ ቁልፍ እንዲያመነጭ
+    from cryptography.fernet import Fernet
+    SECRET_KEY = Fernet.generate_key().decode()
+    cipher_suite = Fernet(SECRET_KEY.encode())
 
 def save_secure_cookie(uid, cookie_text):
     """ኩኪውን ኢንክሪፕት አድርጎ ያስቀምጣል"""
