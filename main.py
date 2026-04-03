@@ -1377,7 +1377,7 @@ def _cleanup(uid: int):
 
 
 # ══════════════════════════════════════════
-#  ENTRY POINT
+#  ENTRY POINT (FIXED FOR RAILWAY)
 # ══════════════════════════════════════════
 
 async def main():
@@ -1413,24 +1413,37 @@ async def main():
     app.add_handler(auth_conv)
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, receive_video))
-    # IMPORTANT: web_app_data is a separate filter - not TEXT
     app.add_handler(MessageHandler(filters.StatusUpdate.ALL, handle_web_app_data_check))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_message))
 
-    await app.initialize()
-    # Kill any existing connections first
-    try:
-        await app.bot.delete_webhook(drop_pending_updates=True)
-    except Exception:
-        pass
-    await asyncio.sleep(3)  # Wait for old instance to die
-    await app.start()
-    await app.updater.start_polling(
-        drop_pending_updates=True,
-        allowed_updates=["message", "callback_query"],
-    )
+    # ---------- FIX: Use webhook on Railway, fallback to polling ----------
+    RAILWAY_PUBLIC_URL = os.getenv("RAILWAY_PUBLIC_URL")
+    PORT = int(os.environ.get("PORT", 8443))
 
-    print("✅ Bot is running...")
+    if RAILWAY_PUBLIC_URL:
+        # Webhook mode (Railway)
+        await app.initialize()
+        await app.start()
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        webhook_url = f"{RAILWAY_PUBLIC_URL}/{BOT_TOKEN}"
+        await app.bot.set_webhook(webhook_url)
+        await app.updater.start_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=webhook_url
+        )
+        print(f"✅ Bot running with webhook on {webhook_url}")
+    else:
+        # Polling mode (local development)
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(
+            drop_pending_updates=True,
+            allowed_updates=["message", "callback_query"],
+        )
+        print("✅ Bot running with polling (local)")
+
     await asyncio.Event().wait()
 
 
