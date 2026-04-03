@@ -8,13 +8,18 @@ import time
 
 class ProgressMessage:
     def __init__(self, message, title: str = "Processing"):
-        self.message   = message
-        self.title     = title
-        self.msg       = None
-        self._start    = None
-        self._last_edit= 0
+        self.message = message
+        self.title = title
+        self.msg = None
+        self._start = None
+        self._last_edit = 0
         self._last_pct = -1
-        self._done     = False
+        self._done = False
+
+        # Internal tracking for live speed calculation
+        self._last_downloaded = 0.0
+        self._last_speed_time = 0.0
+        self._current_speed = 0.0
 
     async def start(self):
         self._start = time.time()
@@ -33,43 +38,57 @@ class ProgressMessage:
             return
 
         now = time.time()
-        # Edit max every 2 seconds to avoid Telegram flood
+
+        # --- Live speed calculation (overwrites the passed 'speed' argument) ---
+        if downloaded > self._last_downloaded and self._last_speed_time > 0:
+            delta_bytes = downloaded - self._last_downloaded
+            delta_time = now - self._last_speed_time
+            if delta_time > 0:
+                self._current_speed = delta_bytes / delta_time
+        # Update tracking values for next call
+        self._last_downloaded = downloaded
+        self._last_speed_time = now
+
+        # Use the internally calculated speed
+        live_speed = self._current_speed
+
+        # --- Throttling: edit at most every 2 seconds and when % changes by at least 1% ---
         if now - self._last_edit < 2.0:
             return
         if abs(pct - self._last_pct) < 1.0 and pct < 99:
             return
 
         self._last_edit = now
-        self._last_pct  = pct
+        self._last_pct = pct
 
         elapsed = int(now - self._start)
-        e_str   = f"{elapsed//60:02d}:{elapsed%60:02d}"
+        e_str = f"{elapsed//60:02d}:{elapsed%60:02d}"
 
-        # Build bar
+        # Progress bar
         filled = int(pct / 10)
-        bar    = "▰" * filled + "▱" * (10 - filled)
+        bar = "▰" * filled + "▱" * (10 - filled)
 
-        # Speed display
-        if speed > 0:
-            if speed >= 1024 * 1024:
-                spd_str = f"{speed/1024/1024:.1f} MB/s"
-            elif speed >= 1024:
-                spd_str = f"{speed/1024:.0f} KB/s"
+        # Speed display (using live_speed)
+        if live_speed > 0:
+            if live_speed >= 1024 * 1024:
+                spd_str = f"{live_speed/1024/1024:.1f} MB/s"
+            elif live_speed >= 1024:
+                spd_str = f"{live_speed/1024:.0f} KB/s"
             else:
-                spd_str = f"{speed:.0f} B/s"
+                spd_str = f"{live_speed:.0f} B/s"
         else:
             spd_str = "-- KB/s"
 
         # ETA
-        if speed > 0 and total > downloaded > 0:
-            remaining = (total - downloaded) / speed
-            eta_str   = f"{int(remaining//60):02d}:{int(remaining%60):02d}"
+        if live_speed > 0 and total > downloaded > 0:
+            remaining = (total - downloaded) / live_speed
+            eta_str = f"{int(remaining//60):02d}:{int(remaining%60):02d}"
         else:
             eta_str = "--"
 
         # Size display
         if total > 0:
-            dl_mb    = downloaded / 1024 / 1024
+            dl_mb = downloaded / 1024 / 1024
             total_mb = total / 1024 / 1024
             size_str = f"{dl_mb:.1f}/{total_mb:.1f} MB"
         else:
@@ -96,7 +115,7 @@ class ProgressMessage:
             return
         self._done = True
         elapsed = int(time.time() - self._start)
-        e_str   = f"{elapsed//60:02d}:{elapsed%60:02d}"
+        e_str = f"{elapsed//60:02d}:{elapsed%60:02d}"
         text = (
             f"✅ *{self.title} — Done!*\n\n"
             f"▰▰▰▰▰▰▰▰▰▰ 100%\n"
