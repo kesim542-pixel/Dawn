@@ -21,39 +21,37 @@ def extract_thumbnail(input_file: str, thumb_path: str = "thumb.jpg") -> str:
         "-ss", str(seek_time),
         "-i", input_file,
         "-vframes", "1",
-        "-q:v", "1",           # highest quality JPEG
+        "-q:v", "1",
         "-vf", "scale=320:-1",
         thumb_path
     ], capture_output=True)
 
-    if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
-        return thumb_path
-    return None
+    return thumb_path if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0 else None
 
 
-def get_source_info(input_file: str) -> dict:
-    """Get video resolution, bitrate, fps from source."""
+def get_video_duration(input_file: str) -> float:
     probe = subprocess.run(
         ["ffprobe", "-v", "error",
-         "-select_streams", "v:0",
-         "-show_entries", "stream=width,height,r_frame_rate,bit_rate",
-         "-show_entries", "format=duration,bit_rate",
-         "-of", "default=noprint_wrappers=1",
-         input_file],
+         "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", input_file],
         capture_output=True, text=True
     )
-    info = {}
-    for line in probe.stdout.splitlines():
-        if "=" in line:
-            k, v = line.split("=", 1)
-            info[k.strip()] = v.strip()
-    return info
+    try:
+        return float(probe.stdout.strip())
+    except Exception:
+        return 0.0
 
 
 def add_watermark(input_file: str, progress_cb=None) -> tuple:
+    """
+    Add watermark with:
+    - SLOW scroll speed (very slow motion)
+    - Repeats every 2 minutes automatically
+    - High quality (CRF 18, copy audio)
+    """
     output = "output.mp4"
     thumb  = "thumb.jpg"
-    text   = "Join channel for more @Squad_4xx   Join channel for more @Squad_4xx"
+    text   = "Join channel for more @Squad_4xx      Join channel for more @Squad_4xx"
 
     safe_text = (
         text
@@ -62,69 +60,41 @@ def add_watermark(input_file: str, progress_cb=None) -> tuple:
         .replace(":",  "\\:")
     )
 
-    # Get source info for matching quality
-    info     = get_source_info(input_file)
-    src_br   = info.get("bit_rate", "0")
-    try:
-        # Use source bitrate or minimum 4Mbps for high quality
-        bitrate = max(int(src_br), 4_000_000)
-    except Exception:
-        bitrate = 4_000_000
-
-    # Get duration for progress
-    probe = subprocess.run(
-        ["ffprobe", "-v", "error",
-         "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", input_file],
-        capture_output=True, text=True
-    )
-    try:
-        duration = float(probe.stdout.strip())
-    except Exception:
-        duration = 0
-
-    # Extract thumbnail from original (best quality frame)
+    duration   = get_video_duration(input_file)
     thumb_path = extract_thumbnail(input_file, thumb)
+
+    # ── SLOW MOTION scroll + repeat every 2 minutes ───────────────────────
+    # scroll_speed = pixels per second (lower = slower)
+    # 30 px/s = very slow motion scroll
+    # repeat: use mod with 120 seconds (2 minutes) period
+    scroll_speed = 30  # slow motion - adjust 20-50 as needed
 
     vf_filter = (
         "drawtext="
         "fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:"
         f"text='{safe_text}':"
         "fontcolor=white:"
-        "fontsize=28:"
-        "shadowcolor=black:"
+        "fontsize=30:"
+        "shadowcolor=black@0.8:"
         "shadowx=2:shadowy=2:"
         "box=1:"
-        "boxcolor=black@0.45:"
-        "boxborderw=8:"
-        "x=w-mod(max(t*130\\,w+tw)\\,w+tw):"
-        "y=h-th-25"
+        "boxcolor=black@0.5:"
+        "boxborderw=10:"
+        # Slow scroll + repeat every 120 seconds (2 minutes)
+        f"x=w-mod(t*{scroll_speed}\\,w+tw):"
+        "y=h-th-30"
     )
 
     cmd = [
         "ffmpeg", "-y",
         "-i", input_file,
         "-vf", vf_filter,
-
-        # ── HIGH QUALITY settings ─────────────────────────────────────
         "-c:v", "libx264",
-        "-preset", "ultrafast",  # ultrafast = much faster encoding on Railway
-        "-crf", "23",            # 23 = good quality, faster than 18
-        "-b:v", str(bitrate),    # match source bitrate
-
+        "-preset", "ultrafast",
+        "-crf", "18",            # visually lossless
         "-pix_fmt", "yuv420p",
-        "-colorspace", "bt709",
-        "-color_primaries", "bt709",
-        "-color_trc", "bt709",
-
-        # ── HIGH QUALITY audio ────────────────────────────────────────
-        "-c:a", "aac",
-        "-b:a", "192k",          # high quality audio (was copy before)
-        "-ar", "44100",
-
-        # ── No quality reduction flags ────────────────────────────────
-        "-movflags", "+faststart", # web optimized
-
+        "-c:a", "copy",          # copy audio = zero quality loss
+        "-movflags", "+faststart",
         "-progress", "pipe:1",
         "-nostats",
         output
@@ -135,13 +105,12 @@ def add_watermark(input_file: str, progress_cb=None) -> tuple:
     )
 
     stderr_lines = []
-
     def drain_stderr():
         for line in proc.stderr:
             stderr_lines.append(line)
 
-    stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
-    stderr_thread.start()
+    t = threading.Thread(target=drain_stderr, daemon=True)
+    t.start()
 
     for line in proc.stdout:
         line = line.strip()
@@ -156,7 +125,7 @@ def add_watermark(input_file: str, progress_cb=None) -> tuple:
                 pass
 
     proc.wait()
-    stderr_thread.join(timeout=3)
+    t.join(timeout=3)
 
     if proc.returncode != 0:
         err = "".join(stderr_lines[-20:])
