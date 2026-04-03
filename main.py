@@ -1354,12 +1354,10 @@ async def process_and_post(message, uid: int):
         dl_prog = ProgressMessage(message, "⬇️ Downloading")
         await dl_prog.start()
         try:
-            _dl_start = time.time()
             def dl_cb(pct, spd, dled, tot):
-                elapsed  = max(time.time() - _dl_start, 0.001)
-                speed    = dled / elapsed if dled > 0 else spd
+                # spd comes directly from yt-dlp (bytes/sec)
                 asyncio.run_coroutine_threadsafe(
-                    dl_prog.update(pct, speed, dled, tot), loop
+                    dl_prog.update(pct, spd, dled, tot), loop
                 )
             file = await download_video(link, client, progress_cb=dl_cb)
             await dl_prog.done("Download complete!")
@@ -1396,14 +1394,13 @@ async def process_and_post(message, uid: int):
         await up_prog.start()
         try:
             # Track upload speed
-            _up_start  = asyncio.get_event_loop().time()
-            _up_last   = [0.0]
+            import time as _time
+            _up_start = _time.time()
 
             async def upload_cb(sent, total):
                 if total:
-                    now      = asyncio.get_event_loop().time()
-                    elapsed  = max(now - _up_start, 0.001)
-                    speed    = sent / elapsed  # bytes per second
+                    elapsed = max(_time.time() - _up_start, 0.001)
+                    speed   = sent / elapsed
                     await up_prog.update(sent / total * 100, speed, sent, total)
 
             sent_msg = await client.send_file(
@@ -1416,21 +1413,27 @@ async def process_and_post(message, uid: int):
             post_link = f"https://t.me/{CHANNEL.replace('@','')}/{sent_msg.id}"
             await up_prog.done(f"[👉 View post]({post_link})")
 
-            # ── Forward video to admin user ──────────────────────────────
+            # ── Send video copy to user (no channel name shown) ─────────
             try:
-                await client.forward_messages(
-                    entity=uid,
-                    messages=sent_msg,
-                    from_peer=CHANNEL
+                # Send as fresh file — hides channel origin
+                await bot_app.bot.send_video(
+                    chat_id=uid,
+                    video=sent_msg.id and f"https://t.me/c/{str(sent_msg.peer_id.channel_id)}/{sent_msg.id}" or file,
+                    caption=f"✅ *Posted!*\n{full_caption[:500] if full_caption else ''}",
+                    parse_mode="Markdown",
+                    supports_streaming=True,
                 )
             except Exception:
-                # Fallback: send as direct message
                 try:
-                    await bot_app.bot.send_message(
-                        uid,
-                        f"✅ *Posted to channel!*\n[👉 View post]({post_link})",
-                        parse_mode="Markdown"
-                    )
+                    # Fallback: send original file directly
+                    with open(file, "rb") as vf:
+                        await bot_app.bot.send_video(
+                            chat_id=uid,
+                            video=vf,
+                            caption=f"✅ *Posted to channel!*\n[👉 View]({post_link})",
+                            parse_mode="Markdown",
+                            supports_streaming=True,
+                        )
                 except Exception:
                     pass
 
