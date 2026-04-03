@@ -1,7 +1,7 @@
 import asyncio
 import os
 
-# ኢንስታግራም ለመጠቀም የሚያስፈልጉ መሰረታዊ ተግባራት
+# ኢንስታግራም ለመጠቀም የሚያስፈልጉ የተስተካከሉ ተግባራት
 async def get_auth_url():
     """ለኢንስታግራም መግቢያ ሊንክ ያመነጫል"""
     return "https://www.instagram.com/accounts/login/"
@@ -15,7 +15,7 @@ async def post_video_from_file(uid, video_path, caption):
     await asyncio.sleep(2)
     return {"status": "success", "media_id": "12345"}
 
-async def ig_get_token(code):
+async def get_token(code):
     """የመግቢያ ኮዱን ወደ ቶከን ይቀይራል"""
     return "sample_ig_token"
 
@@ -23,3 +23,7 @@ async def save_token(uid, token):
     """ቶከኑን ለወደፊት እንዲያገለግል ያስቀምጣል"""
     print(f"ቶከን ለተጠቃሚ {uid} ተቀምጧል።")
     return True
+
+async def ig_get_token(code):
+    """ለጥንቃቄ የተቀመጠ ተጨማሪ ስም"""
+    return await get_token(code)
