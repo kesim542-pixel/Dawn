@@ -18,6 +18,9 @@ from watermark import add_watermark, get_thumbnail_only
 from progress import ProgressMessage
 from server import run_server, get_tokens
 from tiktok import get_auth_url, post_video
+from tiktok_bypass import upload_video_session, get_session as tt_get_session, login_with_cookies as tt_login
+from instagram import get_auth_url as ig_auth_url, post_video_from_file as ig_post, get_token as ig_get_token, save_token as ig_save_token
+from server import run_server, get_tokens, get_instagram_tokens
 from gemini import generate_full_post
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
@@ -185,7 +188,8 @@ async def guard(update: Update) -> bool:
 def main_menu_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⬇️ Download Video", callback_data="menu_download")],
-        [InlineKeyboardButton("🎵 Post to TikTok", callback_data="menu_tiktok")],
+        [InlineKeyboardButton("🎵 TikTok",         callback_data="menu_tiktok"),
+         InlineKeyboardButton("📸 Instagram",      callback_data="menu_instagram")],
         [InlineKeyboardButton("📊 Stats",          callback_data="menu_stats"),
          InlineKeyboardButton("🔐 Auth",           callback_data="menu_auth")],
         [InlineKeyboardButton("🤖 AI Settings",    callback_data="menu_ai_settings"),
@@ -209,10 +213,12 @@ def download_options_keyboard():
 
 def post_destination_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Telegram Channel", callback_data="dest_telegram")],
-        [InlineKeyboardButton("🎵 TikTok",           callback_data="dest_tiktok")],
-        [InlineKeyboardButton("📢 + 🎵 Both",        callback_data="dest_both")],
-        [InlineKeyboardButton("🔙 Back",             callback_data="menu_back")],
+        [InlineKeyboardButton("📢 Telegram Channel",   callback_data="dest_telegram")],
+        [InlineKeyboardButton("🎵 TikTok (API)",       callback_data="dest_tiktok")],
+        [InlineKeyboardButton("🎵 TikTok (Bypass) ⚡", callback_data="dest_tiktok_bypass")],
+        [InlineKeyboardButton("📸 Instagram",          callback_data="dest_instagram")],
+        [InlineKeyboardButton("📢 + 🎵 + 📸 All",     callback_data="dest_all")],
+        [InlineKeyboardButton("🔙 Back",               callback_data="menu_back")],
     ])
 
 def tiktok_privacy_keyboard():
@@ -326,6 +332,49 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update): return
     await show_stats(update.message)
+
+async def ttcookie_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set TikTok cookies for bypass posting: /ttcookie <cookie_string>"""
+    if not await guard(update): return
+    uid  = update.effective_user.id
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "📋 *How to get TikTok cookies:*\n\n"
+            "1️⃣ Open browser → tiktok.com → Login\n"
+            "2️⃣ Press F12 → Network tab\n"
+            "3️⃣ Refresh page → click any request\n"
+            "4️⃣ Find *Cookie* in Request Headers\n"
+            "5️⃣ Copy the full cookie value\n\n"
+            "Then send:\n"
+            "`/ttcookie YOUR_COOKIE_HERE`\n\n"
+            "⚠️ Keep cookies private!",
+            parse_mode="Markdown"
+        )
+        return
+
+    cookie = " ".join(args)
+    msg = await update.message.reply_text("🔄 Verifying cookies...")
+
+    try:
+        session = await tt_login(str(uid), cookie)
+        username = session.get("username", "unknown")
+        nickname = session.get("nickname", username)
+        await msg.edit_text(
+            f"✅ *TikTok Session Connected!*\n\n"
+            f"👤 Account: @{username}\n"
+            f"📛 Name: {nickname}\n\n"
+            "You can now post to TikTok without API limits!\n"
+            "Use destination: 🎵 TikTok (Bypass)",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await msg.edit_text(
+            f"❌ *Cookie verification failed:*\n{str(e)[:200]}\n\n"
+            "Make sure you copied the full cookie string.",
+            parse_mode="Markdown"
+        )
+
 
 async def testai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Test Gemini API and show exact error"""
@@ -563,9 +612,12 @@ async def show_confirm(message, uid: int):
     dest     = data.get("dest",     "dest_telegram")
     wm       = data.get("wm",       "wm_off")
     privacy  = data.get("privacy",  "SELF_ONLY")
-    dest_label    = {"dest_telegram": "📢 Telegram",
-                     "dest_tiktok"  : "🎵 TikTok",
-                     "dest_both"    : "📢 + 🎵 Both"}.get(dest, dest)
+    dest_label    = {"dest_telegram"     : "📢 Telegram",
+                     "dest_tiktok"        : "🎵 TikTok (API)",
+                     "dest_tiktok_bypass" : "🎵 TikTok (Bypass) ⚡",
+                     "dest_both"          : "📢 + 🎵 Both",
+                     "dest_instagram"     : "📸 Instagram",
+                     "dest_all"           : "📢 + 🎵 + 📸 All"}.get(dest, dest)
     wm_label      = "✅ With Watermark" if wm == "wm_on" else "❌ No Watermark"
     privacy_label = {"PUBLIC_TO_EVERYONE": "🌍 Public",
                      "FRIEND_ONLY"       : "👥 Friends",
@@ -1093,6 +1145,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    if data == "menu_instagram":
+        ig_tokens = get_instagram_tokens()
+        if not ig_tokens.get(str(uid)):
+            await query.message.edit_text(
+                "📸 *Connect Instagram Account*\n\n"
+                "Tap below to authorize Instagram:\n\n"
+                "⚠️ Requires Instagram Business or Creator account",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔗 Login with Instagram",
+                        url=ig_auth_url(uid))],
+                    [InlineKeyboardButton("🔙 Back", callback_data="menu_back")]
+                ])
+            )
+        else:
+            await query.message.edit_text(
+                "📸 *Instagram Connected!*\n\nSend a video to post.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Reconnect", url=ig_auth_url(uid))],
+                    [InlineKeyboardButton("🔙 Back", callback_data="menu_back")]
+                ])
+            )
+        return
+
     if data == "menu_tiktok":
         tokens = get_tokens()
         if not tokens.get(str(uid)):
@@ -1129,10 +1206,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if data in ("dest_telegram", "dest_tiktok", "dest_both"):
+    if data in ("dest_telegram", "dest_tiktok", "dest_tiktok_bypass", "dest_both", "dest_instagram", "dest_all"):
         if uid not in user_post_data: user_post_data[uid] = {}
         user_post_data[uid]["dest"] = data
-        if data in ("dest_tiktok", "dest_both"):
+        if data in ("dest_tiktok", "dest_both", "dest_all"):
             await query.message.edit_text(
                 "🔒 Choose TikTok privacy:",
                 reply_markup=tiktok_privacy_keyboard()
@@ -1277,8 +1354,13 @@ async def process_and_post(message, uid: int):
         dl_prog = ProgressMessage(message, "⬇️ Downloading")
         await dl_prog.start()
         try:
+            _dl_start = time.time()
             def dl_cb(pct, spd, dled, tot):
-                asyncio.run_coroutine_threadsafe(dl_prog.update(pct, spd, dled, tot), loop)
+                elapsed  = max(time.time() - _dl_start, 0.001)
+                speed    = dled / elapsed if dled > 0 else spd
+                asyncio.run_coroutine_threadsafe(
+                    dl_prog.update(pct, speed, dled, tot), loop
+                )
             file = await download_video(link, client, progress_cb=dl_cb)
             await dl_prog.done("Download complete!")
         except Exception as e:
@@ -1309,26 +1391,124 @@ async def process_and_post(message, uid: int):
             thumb = None
 
     # Step 3: Telegram
-    if dest in ("dest_telegram", "dest_both"):
+    if dest in ("dest_telegram", "dest_both", "dest_all"):
         up_prog = ProgressMessage(message, "📤 Uploading to Channel")
         await up_prog.start()
         try:
+            # Track upload speed
+            _up_start  = asyncio.get_event_loop().time()
+            _up_last   = [0.0]
+
             async def upload_cb(sent, total):
-                if total: await up_prog.update(sent / total * 100, 0, sent, total)
-            msg = await client.send_file(
+                if total:
+                    now      = asyncio.get_event_loop().time()
+                    elapsed  = max(now - _up_start, 0.001)
+                    speed    = sent / elapsed  # bytes per second
+                    await up_prog.update(sent / total * 100, speed, sent, total)
+
+            sent_msg = await client.send_file(
                 CHANNEL, file,
                 caption=full_caption or "✅",
                 thumb=thumb,
                 progress_callback=upload_cb,
                 supports_streaming=True
             )
-            post_link = f"https://t.me/{CHANNEL.replace('@','')}/{msg.id}"
+            post_link = f"https://t.me/{CHANNEL.replace('@','')}/{sent_msg.id}"
             await up_prog.done(f"[👉 View post]({post_link})")
+
+            # ── Forward video to admin user ──────────────────────────────
+            try:
+                await client.forward_messages(
+                    entity=uid,
+                    messages=sent_msg,
+                    from_peer=CHANNEL
+                )
+            except Exception:
+                # Fallback: send as direct message
+                try:
+                    await bot_app.bot.send_message(
+                        uid,
+                        f"✅ *Posted to channel!*\n[👉 View post]({post_link})",
+                        parse_mode="Markdown"
+                    )
+                except Exception:
+                    pass
+
         except Exception as e:
             await up_prog.error(f"Upload failed: {e}")
 
-    # Step 4: TikTok
-    if dest in ("dest_tiktok", "dest_both"):
+    # Step 4: TikTok Bypass (session-based, no API limit)
+    if dest in ("dest_tiktok_bypass",):
+        session = tt_get_session(str(uid))
+        if not session:
+            await message.reply_text(
+                "⚠️ No TikTok session found.\n\n"
+                "Set up bypass with:\n`/ttcookie YOUR_COOKIES`",
+                parse_mode="Markdown",
+                reply_markup=back_keyboard()
+            )
+        else:
+            tt_prog = ProgressMessage(message, "🎵 Posting to TikTok (Bypass)")
+            await tt_prog.start()
+            try:
+                priv_map = {
+                    "PUBLIC_TO_EVERYONE": 0,
+                    "FRIEND_ONLY"       : 1,
+                    "SELF_ONLY"         : 2,
+                }
+                priv_int = priv_map.get(privacy, 0)
+                result   = await upload_video_session(
+                    uid=str(uid),
+                    video_path=file,
+                    caption=caption,
+                    hashtags=hashtags,
+                    privacy=priv_int,
+                )
+                post_url = result.get("url", "")
+                username = result.get("username", "")
+                await tt_prog.done(
+                    f"✅ Posted to TikTok!\n"
+                    f"@{username}\n"
+                    f"[👉 View post]({post_url})" if post_url else
+                    f"✅ Posted to TikTok! Check @{username}"
+                )
+            except Exception as e:
+                await tt_prog.error(f"Bypass failed:\n{str(e)[:300]}")
+
+    # Step 5: Instagram
+    if dest in ("dest_instagram", "dest_all"):
+        ig_tokens = get_instagram_tokens()
+        ig_token  = ig_tokens.get(str(uid))
+        if not ig_token:
+            await message.reply_text(
+                "⚠️ Instagram not connected.\n\nTap 📸 Instagram in main menu to connect.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📸 Connect Instagram", callback_data="menu_instagram")
+                ]])
+            )
+        else:
+            ig_prog = ProgressMessage(message, "📸 Posting to Instagram")
+            await ig_prog.start()
+            try:
+                # Get public URL for video
+                server_url = os.getenv("RAILWAY_PUBLIC_DOMAIN",
+                    "https://dawn-production-7c5f.up.railway.app")
+                result = await ig_post(
+                    access_token=ig_token["access_token"],
+                    ig_user_id=ig_token["user_id"],
+                    video_path=file,
+                    caption=full_caption,
+                    upload_server_url=server_url
+                )
+                post_url = result.get("url", "")
+                await ig_prog.done(
+                    f"✅ Posted to Instagram!\n[👉 View post]({post_url})"
+                )
+            except Exception as e:
+                await ig_prog.error(f"Instagram failed:\n{str(e)[:300]}")
+
+    # Step 5: TikTok
+    if dest in ("dest_tiktok", "dest_both", "dest_all"):
         tokens = get_tokens()
         token  = tokens.get(str(uid))
         if not token:
@@ -1410,6 +1590,7 @@ async def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("testai", testai_command))
+    app.add_handler(CommandHandler("ttcookie", ttcookie_command))
     app.add_handler(auth_conv)
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, receive_video))
