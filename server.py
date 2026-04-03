@@ -10,6 +10,7 @@ import uvicorn
 app = FastAPI()
 
 tiktok_tokens: dict = {}
+instagram_tokens: dict = {} # የኢንስታግራም ቶከኖች የሚቀመጡበት
 
 # ── Health check ──────────────────────────────────────────────────────────
 @app.get("/")
@@ -144,8 +145,15 @@ margin:0;text-align:center;padding:20px;box-sizing:border-box">
 <p style="color:#aaa">{body}</p></div>{script}</body></html>"""
 
 
+# ── Token Getters ────────────────────────────────────────────────────────
+
 def get_tokens():
+    """ለቲክቶክ ቶከኖችን ይመልሳል"""
     return tiktok_tokens
+
+def get_instagram_tokens():
+    """ለኢንስታግራም ቶከኖችን ይመልሳል (አሁን የተጨመረ)"""
+    return instagram_tokens
 
 
 def run_server():
