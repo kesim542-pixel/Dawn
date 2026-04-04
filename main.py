@@ -209,7 +209,7 @@ def download_options_keyboard():
 
 def post_destination_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Telegram Channel",   callback_data="dest_telegram")],
+        [InlineKeyboardButton("📢 for self Download ",   callback_data="dest_telegram")],
         [InlineKeyboardButton("🎵 TikTok (API)",       callback_data="dest_tiktok")],
         [InlineKeyboardButton("🎵 TikTok (Bypass) ⚡", callback_data="dest_tiktok_bypass")],
         [InlineKeyboardButton("📸 Instagram",          callback_data="dest_instagram")],
