@@ -598,7 +598,7 @@ async def show_confirm(message, uid: int):
     dest     = data.get("dest",     "dest_telegram")
     wm       = data.get("wm",       "wm_off")
     privacy  = data.get("privacy",  "SELF_ONLY")
-    dest_label    = {"dest_telegram"     : "📢 Telegram",
+    dest_label    = {"dest_telegram"     : "📢 for self Download",
                      "dest_tiktok"        : "🎵 TikTok (API)",
                      "dest_tiktok_bypass" : "🎵 TikTok (Bypass) ⚡",
                      "dest_both"          : "📢 + 🎵 Both",
@@ -1301,7 +1301,7 @@ async def generate_thumbnail(video_path: str) -> str:
             "ffmpeg", "-i", video_path, "-ss", "00:00:01",
             "-vframes", "1", "-q:v", "2", thumb_path, "-y"
         ]
-        subprocess.run(cmd, check=True, capture_output=True, timeout=10)
+        subprocess.run(cmd, check=True, capture_output=True, timeout=30)
         if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 5000:
             return thumb_path
     except Exception:
@@ -1310,36 +1310,36 @@ async def generate_thumbnail(video_path: str) -> str:
 
 
 # ══════════════════════════════════════════
-#  WATERMARK FUNCTION (HIGH QUALITY, CRF 18)
+#  WATERMARK FUNCTION (HIGH QUALITY, FAST PRESET)
 # ══════════════════════════════════════════
 
 def add_watermark_high_quality(input_path: str, progress_callback=None):
     """
-    Add watermark with high-quality encoding (CRF 18, slow preset).
-    Returns (output_path, thumbnail_path)
+    Add watermark with high-quality encoding but using 'fast' preset
+    to avoid SIGKILL on resource-limited servers.
     """
     output_path = "output.mp4"
     thumb_path = "thumb.jpg"
 
-    # ffmpeg command: add text watermark (customize as needed)
-    # Replace the drawtext with your own filter if required
+    # Use fast preset, limit threads, still crf 18 for visual losslessness
     cmd = [
         "ffmpeg", "-i", input_path,
         "-vf", "drawtext=text='Dawn Bot':fontcolor=white:fontsize=24:x=10:y=10",
         "-c:v", "libx264",
-        "-crf", "18",           # visually lossless
-        "-preset", "slow",      # better compression efficiency
-        "-c:a", "copy",         # copy audio without re-encoding
+        "-crf", "18",
+        "-preset", "fast",          # Changed from 'slow' to 'fast'
+        "-threads", "2",            # Limit threads to avoid memory spike
+        "-c:a", "copy",
         "-movflags", "+faststart",
         output_path, "-y"
     ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    subprocess.run(cmd, check=True, capture_output=True, timeout=300)
 
     # Generate thumbnail from watermarked video
     subprocess.run([
         "ffmpeg", "-i", output_path, "-ss", "00:00:01",
         "-vframes", "1", "-q:v", "2", thumb_path, "-y"
-    ], check=True, capture_output=True)
+    ], check=True, capture_output=True, timeout=30)
 
     if progress_callback:
         progress_callback(100)
@@ -1352,7 +1352,7 @@ def get_thumbnail_only(input_path: str):
     subprocess.run([
         "ffmpeg", "-i", input_path, "-ss", "00:00:01",
         "-vframes", "1", "-q:v", "2", thumb_path, "-y"
-    ], check=True, capture_output=True)
+    ], check=True, capture_output=True, timeout=30)
     return thumb_path
 
 
@@ -1409,14 +1409,13 @@ async def process_and_post(message, uid: int):
         await message.reply_text("❗ No video or link found.", reply_markup=back_keyboard())
         return
 
-    # Step 2: Watermark (high quality when enabled)
+    # Step 2: Watermark (high quality when enabled, using fast preset)
     if wm == "wm_on":
         wm_prog = ProgressMessage(message, "🖊 Adding Watermark (high quality)")
         await wm_prog.start()
         try:
             def wm_cb(pct):
                 asyncio.run_coroutine_threadsafe(wm_prog.update(pct, 0, 0, 0), loop)
-            # Use the high-quality watermark function
             file, thumb = await loop.run_in_executor(None, add_watermark_high_quality, file, wm_cb)
             await wm_prog.done("Watermark added (near-lossless)!")
         except Exception as e:
