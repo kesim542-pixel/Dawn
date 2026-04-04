@@ -6,9 +6,6 @@ import threading
 import time
 import re as _re
 import warnings
-import json as _json
-from cryptography.fernet import Fernet # የተጨመረ
-
 warnings.filterwarnings('ignore', message='.*per_message.*')
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import (
@@ -30,37 +27,6 @@ from telethon.errors import SessionPasswordNeededError
 from dotenv import load_dotenv
 
 load_dotenv()
-
-# ══════════════════════════════════════════
-#  ENCRYPTION SETUP (የኩኪ ደህንነት)
-# ══════════════════════════════════════════
-# መስመር 38 እና 39ን በዚህ ተካው (Replace lines 38-39 with this)
-SECRET_KEY = os.getenv("SECRET_KEY", "VkfX2NfT3pMNGVfU2VjcmV0S2V5XzEyMzQ1Njc4OQ==")
-try:
-    cipher_suite = Fernet(SECRET_KEY.encode())
-except Exception:
-    # ቁልፉ ከተሳሳተ በራሱ ትክክለኛ ቁልፍ እንዲያመነጭ
-    from cryptography.fernet import Fernet
-    SECRET_KEY = Fernet.generate_key().decode()
-    cipher_suite = Fernet(SECRET_KEY.encode())
-
-def save_secure_cookie(uid, cookie_text):
-    """ኩኪውን ኢንክሪፕት አድርጎ ያስቀምጣል"""
-    encrypted_data = cipher_suite.encrypt(cookie_text.encode())
-    with open(f"session_{uid}.dat", "wb") as f:
-        f.write(encrypted_data)
-
-def load_secure_cookie(uid):
-    """ኩኪውን ዲክሪፕት አድርጎ ያነባል"""
-    path = f"session_{uid}.dat"
-    if not os.path.exists(path): return None
-    try:
-        with open(path, "rb") as f:
-            return cipher_suite.decrypt(f.read()).decode()
-    except Exception:
-        return None
-
-# ══════════════════════════════════════════
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID    = int(os.getenv("API_ID"))
@@ -99,6 +65,7 @@ AI_MODELS = {
 ai_model_setting = {"model": "auto"}  # global setting
 
 # ── User access database ──────────────────────────────────────────────────
+import json as _json
 DB_FILE = "users.json"
 
 def load_db() -> dict:
@@ -379,7 +346,8 @@ async def ttcookie_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "3️⃣ Refresh page → click any request\n"
             "4️⃣ Find *Cookie* in Request Headers\n"
             "5️⃣ Copy the full cookie value\n\n"
-            "Or simply send the cookie as a `.txt` file to the bot!\n"
+            "Then send:\n"
+            "`/ttcookie YOUR_COOKIE_HERE`\n\n"
             "⚠️ Keep cookies private!",
             parse_mode="Markdown"
         )
@@ -392,10 +360,6 @@ async def ttcookie_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session = await tt_login(str(uid), cookie)
         username = session.get("username", "unknown")
         nickname = session.get("nickname", username)
-        
-        # Save secure cookie even if sent via text
-        save_secure_cookie(uid, cookie)
-        
         await msg.edit_text(
             f"✅ *TikTok Session Connected!*\n\n"
             f"👤 Account: @{username}\n"
@@ -470,50 +434,6 @@ async def show_stats(message):
             [InlineKeyboardButton("🏠 Main Menu",    callback_data="menu_back")],
         ])
     )
-
-
-# ══════════════════════════════════════════
-#  COOKIE FILE HANDLER (አዲሱ የፋይል መቀበያ)
-# ══════════════════════════════════════════
-
-async def handle_cookie_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """የቲውቶክ ኩኪ በ .txt ፋይል ሲላክ ተቀብሎ ኢንክሪፕት ያደርጋል"""
-    if not await guard(update): return
-    uid = update.effective_user.id
-    
-    doc = update.message.document
-    if not doc: return
-    if not (doc.file_name.endswith('.txt') or doc.file_name.endswith('.json')):
-        return # የቴክስት ፋይል ካልሆነ ይዘለዋል
-        
-    msg = await update.message.reply_text("⏳ የኩኪ ፋይሉን በመቀበል ላይ ነኝ...")
-    
-    file = await context.bot.get_file(doc.file_id)
-    path = f"temp_cookie_{uid}.txt"
-    await file.download_to_drive(path)
-
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            cookie_content = f.read()
-        
-        # ደህንነቱ በተጠበቀ ሁኔታ ማስቀመጥ (Encryption)
-        save_secure_cookie(uid, cookie_content)
-        
-        # በትክክል መስራቱን ማረጋገጥ
-        session = await tt_login(str(uid), cookie_content)
-        username = session.get("username", "Unknown")
-        
-        await msg.edit_text(
-            f"✅ *TikTok Connected & Secured!*\n\n"
-            f"👤 Account: @{username}\n"
-            f"🔒 ኩኪው በምስጢር ተቆልፎ ተቀምጧል።\n"
-            f"አሁን ቪዲዮዎችን በ 'Bypass' ሁነታ መፖስት ትችላለህ።",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        await msg.edit_text(f"❌ ስህተት ተፈጥሯል (Invalid Cookie): {str(e)}")
-    finally:
-        if os.path.exists(path): os.remove(path)
 
 
 # ══════════════════════════════════════════
@@ -1472,16 +1392,16 @@ async def process_and_post(message, uid: int):
     if dest in ("dest_telegram", "dest_both", "dest_all"):
         up_prog = ProgressMessage(message, "📤 Uploading to Channel")
         await up_prog.start()
+        sent_msg = None
         try:
-            # Track upload speed
-            import time as _time
-            _up_start = _time.time()
-
+            # Track upload speed with rolling window (via progress_cb bytes)
             async def upload_cb(sent, total):
                 if total:
-                    elapsed = max(_time.time() - _up_start, 0.001)
-                    speed   = sent / elapsed
-                    await up_prog.update(sent / total * 100, speed, sent, total)
+                    await up_prog.update(
+                        pct=sent / total * 100,
+                        downloaded=sent,
+                        total=total
+                    )
 
             sent_msg = await client.send_file(
                 CHANNEL, file,
@@ -1493,49 +1413,48 @@ async def process_and_post(message, uid: int):
             post_link = f"https://t.me/{CHANNEL.replace('@','')}/{sent_msg.id}"
             await up_prog.done(f"[👉 View post]({post_link})")
 
-            # ── Send video copy to user (no channel name shown) ─────────
-            try:
-                # Send as fresh file — hides channel origin
-                await bot_app.bot.send_video(
-                    chat_id=uid,
-                    video=sent_msg.id and f"https://t.me/c/{str(sent_msg.peer_id.channel_id)}/{sent_msg.id}" or file,
-                    caption=f"✅ *Posted!*\n{full_caption[:500] if full_caption else ''}",
-                    parse_mode="Markdown",
-                    supports_streaming=True,
-                )
-            except Exception:
-                try:
-                    # Fallback: send original file directly
-                    with open(file, "rb") as vf:
-                        await bot_app.bot.send_video(
-                            chat_id=uid,
-                            video=vf,
-                            caption=f"✅ *Posted to channel!*\n[👉 View]({post_link})",
-                            parse_mode="Markdown",
-                            supports_streaming=True,
-                        )
-                except Exception:
-                    pass
-
         except Exception as e:
             await up_prog.error(f"Upload failed: {e}")
 
+        # ── Deliver video to user ────────────────────────────────────────
+        if sent_msg:
+            try:
+                # copy_message hides "Forwarded from channel" label
+                await bot_app.bot.copy_message(
+                    chat_id=uid,
+                    from_chat_id=sent_msg.chat_id if hasattr(sent_msg, "chat_id")
+                                 else f"@{CHANNEL.lstrip('@')}",
+                    message_id=sent_msg.id,
+                )
+            except Exception:
+                try:
+                    # Fallback: forward (shows channel name)
+                    await client.forward_messages(
+                        entity=uid,
+                        messages=sent_msg,
+                        from_peer=CHANNEL,
+                        drop_author=True,
+                    )
+                except Exception:
+                    try:
+                        # Last resort: send raw file
+                        with open(file, "rb") as vf:
+                            await bot_app.bot.send_video(
+                                chat_id=uid,
+                                video=vf,
+                                caption="✅ Posted!",
+                                supports_streaming=True,
+                            )
+                    except Exception:
+                        pass
+
     # Step 4: TikTok Bypass (session-based, no API limit)
     if dest in ("dest_tiktok_bypass",):
-        # መጀመሪያ ኩኪውን ከኢንክሪፕትድ ፋይል እናነባለን
-        secure_cookie = load_secure_cookie(uid)
-        if secure_cookie:
-            try:
-                # ኩኪው ካለ ከ bypass ሞጁል ጋር እንዲገናኝ እናደርጋለን
-                await tt_login(str(uid), secure_cookie)
-            except Exception:
-                pass
-
         session = tt_get_session(str(uid))
-        if not session and not secure_cookie:
+        if not session:
             await message.reply_text(
                 "⚠️ No TikTok session found.\n\n"
-                "Please send your TikTok cookie as a `.txt` file to connect.",
+                "Set up bypass with:\n`/ttcookie YOUR_COOKIES`",
                 parse_mode="Markdown",
                 reply_markup=back_keyboard()
             )
@@ -1543,13 +1462,18 @@ async def process_and_post(message, uid: int):
             tt_prog = ProgressMessage(message, "🎵 Posting to TikTok (Bypass)")
             await tt_prog.start()
             try:
-                # ሁልጊዜ Public ሆኖ እንዲለቀቅ (privacy=0) ተደርጓል
+                priv_map = {
+                    "PUBLIC_TO_EVERYONE": 0,
+                    "FRIEND_ONLY"       : 1,
+                    "SELF_ONLY"         : 2,
+                }
+                priv_int = priv_map.get(privacy, 0)
                 result   = await upload_video_session(
                     uid=str(uid),
                     video_path=file,
                     caption=caption,
                     hashtags=hashtags,
-                    privacy=0, # 0 ማለት Public ማለት ነው
+                    privacy=priv_int,
                 )
                 post_url = result.get("url", "")
                 username = result.get("username", "")
@@ -1635,7 +1559,7 @@ async def process_and_post(message, uid: int):
 
 
 def _cleanup(uid: int):
-    for tmp in ["video.mp4", "output.mp4", "thumb.jpg", f"temp_cookie_{uid}.txt"]:
+    for tmp in ["video.mp4", "output.mp4", "thumb.jpg"]:
         if os.path.exists(tmp): os.remove(tmp)
     user_links.pop(uid, None)
     user_videos.pop(uid, None)
@@ -1681,10 +1605,7 @@ async def main():
     app.add_handler(auth_conv)
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, receive_video))
-    
-    # 📌 አዲሱ የፋይል መቀበያ (Cookie File Handler)
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_cookie_file))
-
+    # IMPORTANT: web_app_data is a separate filter - not TEXT
     app.add_handler(MessageHandler(filters.StatusUpdate.ALL, handle_web_app_data_check))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_message))
 
