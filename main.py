@@ -1298,7 +1298,6 @@ async def generate_thumbnail(video_path: str) -> str:
     """Generate a thumbnail from video using ffmpeg (fallback if needed)."""
     thumb_path = "generated_thumb.jpg"
     try:
-        # Extract frame at 1 second
         cmd = [
             "ffmpeg", "-i", video_path, "-ss", "00:00:01",
             "-vframes", "1", "-q:v", "2", thumb_path, "-y"
@@ -1442,13 +1441,15 @@ async def process_and_post(message, uid: int):
                     )
                 except Exception:
                     try:
-                        # Fallback 2: raw send with thumbnail
-                        with open(file, "rb") as vf, open(thumb, "rb") as tf:
+                        # Fallback 2: raw send with thumbnail (fixed parameter name)
+                        with open(file, "rb") as vf:
+                            # Use thumbnail path as string or file object
+                            thumb_arg = thumb if thumb and os.path.exists(thumb) else None
                             await bot_app.bot.send_video(
                                 chat_id=uid,
                                 video=vf,
                                 caption=full_caption or "✅",
-                                thumb=tf,
+                                thumbnail=thumb_arg,  # FIXED: changed from 'thumb' to 'thumbnail'
                                 supports_streaming=True,
                             )
                     except Exception as e:
@@ -1581,7 +1582,6 @@ def _cleanup(uid: int):
 async def main():
     global bot_app
 
-    # Start web server
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
     time.sleep(2)
