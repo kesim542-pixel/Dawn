@@ -27,6 +27,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ========== CONFIGURABLE WATERMARK TEXT ==========
+# Change this to your desired watermark message
+WATERMARK_TEXT = "for more join TG channel @Squad 4xx"
+# =================================================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID    = int(os.getenv("API_ID"))
 API_HASH  = os.getenv("API_HASH")
@@ -598,7 +603,7 @@ async def show_confirm(message, uid: int):
     dest     = data.get("dest",     "dest_telegram")
     wm       = data.get("wm",       "wm_off")
     privacy  = data.get("privacy",  "SELF_ONLY")
-    dest_label    = {"dest_telegram"     : "📢 for self Download",
+    dest_label    = {"dest_telegram"     : "📢 Telegram",
                      "dest_tiktok"        : "🎵 TikTok (API)",
                      "dest_tiktok_bypass" : "🎵 TikTok (Bypass) ⚡",
                      "dest_both"          : "📢 + 🎵 Both",
@@ -1310,25 +1315,28 @@ async def generate_thumbnail(video_path: str) -> str:
 
 
 # ══════════════════════════════════════════
-#  WATERMARK FUNCTION (HIGH QUALITY, FAST PRESET)
+#  WATERMARK FUNCTION (HIGH QUALITY, FAST PRESET, CUSTOM TEXT)
 # ══════════════════════════════════════════
 
 def add_watermark_high_quality(input_path: str, progress_callback=None):
     """
-    Add watermark with high-quality encoding but using 'fast' preset
-    to avoid SIGKILL on resource-limited servers.
+    Add watermark with high-quality encoding using 'fast' preset.
+    Watermark text is taken from the global WATERMARK_TEXT variable.
     """
     output_path = "output.mp4"
     thumb_path = "thumb.jpg"
 
-    # Use fast preset, limit threads, still crf 18 for visual losslessness
+    # Escape single quotes and backslashes for ffmpeg drawtext
+    safe_text = WATERMARK_TEXT.replace("'", r"\'").replace("\\", r"\\")
+    drawtext_filter = f"drawtext=text='{safe_text}':fontcolor=white:fontsize=24:x=10:y=10"
+
     cmd = [
         "ffmpeg", "-i", input_path,
-        "-vf", "drawtext=text='Dawn Bot':fontcolor=white:fontsize=24:x=10:y=10",
+        "-vf", drawtext_filter,
         "-c:v", "libx264",
         "-crf", "18",
-        "-preset", "fast",          # Changed from 'slow' to 'fast'
-        "-threads", "2",            # Limit threads to avoid memory spike
+        "-preset", "fast",
+        "-threads", "2",
         "-c:a", "copy",
         "-movflags", "+faststart",
         output_path, "-y"
