@@ -15,7 +15,6 @@ from telegram.ext import (
     Application
 )
 from downloader import download_video
-from watermark import add_watermark, get_thumbnail_only
 from progress import ProgressMessage
 from server import run_server, get_tokens, get_instagram_tokens
 from tiktok import get_auth_url, post_video
@@ -62,7 +61,7 @@ AI_MODELS = {
     "gemini-1.5-flash-latest": "💨 Gemini 1.5 Flash",
     "gemini-2.0-flash-lite" : "🪶 Gemini 2.0 Lite",
 }
-ai_model_setting = {"model": "auto"}  # global setting
+ai_model_setting = {"model": "auto"}
 
 # ── User access database ──────────────────────────────────────────────────
 import json as _json
@@ -1311,6 +1310,53 @@ async def generate_thumbnail(video_path: str) -> str:
 
 
 # ══════════════════════════════════════════
+#  WATERMARK FUNCTION (HIGH QUALITY, CRF 18)
+# ══════════════════════════════════════════
+
+def add_watermark_high_quality(input_path: str, progress_callback=None):
+    """
+    Add watermark with high-quality encoding (CRF 18, slow preset).
+    Returns (output_path, thumbnail_path)
+    """
+    output_path = "output.mp4"
+    thumb_path = "thumb.jpg"
+
+    # ffmpeg command: add text watermark (customize as needed)
+    # Replace the drawtext with your own filter if required
+    cmd = [
+        "ffmpeg", "-i", input_path,
+        "-vf", "drawtext=text='Dawn Bot':fontcolor=white:fontsize=24:x=10:y=10",
+        "-c:v", "libx264",
+        "-crf", "18",           # visually lossless
+        "-preset", "slow",      # better compression efficiency
+        "-c:a", "copy",         # copy audio without re-encoding
+        "-movflags", "+faststart",
+        output_path, "-y"
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+    # Generate thumbnail from watermarked video
+    subprocess.run([
+        "ffmpeg", "-i", output_path, "-ss", "00:00:01",
+        "-vframes", "1", "-q:v", "2", thumb_path, "-y"
+    ], check=True, capture_output=True)
+
+    if progress_callback:
+        progress_callback(100)
+    return output_path, thumb_path
+
+
+def get_thumbnail_only(input_path: str):
+    """Extract thumbnail without modifying video."""
+    thumb_path = "thumb.jpg"
+    subprocess.run([
+        "ffmpeg", "-i", input_path, "-ss", "00:00:01",
+        "-vframes", "1", "-q:v", "2", thumb_path, "-y"
+    ], check=True, capture_output=True)
+    return thumb_path
+
+
+# ══════════════════════════════════════════
 #  DOWNLOAD → WATERMARK → POST (REFACTORED)
 # ══════════════════════════════════════════
 
@@ -1332,7 +1378,7 @@ async def process_and_post(message, uid: int):
     file  = None
     thumb = None
 
-    # Step 1: Get video
+    # Step 1: Get video (original quality, no re-encoding)
     if video_tg and video_tg.get("file_id"):
         dl_prog = ProgressMessage(message, "⬇️ Saving video")
         await dl_prog.start()
@@ -1363,15 +1409,16 @@ async def process_and_post(message, uid: int):
         await message.reply_text("❗ No video or link found.", reply_markup=back_keyboard())
         return
 
-    # Step 2: Watermark
+    # Step 2: Watermark (high quality when enabled)
     if wm == "wm_on":
-        wm_prog = ProgressMessage(message, "🖊 Adding Watermark")
+        wm_prog = ProgressMessage(message, "🖊 Adding Watermark (high quality)")
         await wm_prog.start()
         try:
             def wm_cb(pct):
                 asyncio.run_coroutine_threadsafe(wm_prog.update(pct, 0, 0, 0), loop)
-            file, thumb = await loop.run_in_executor(None, add_watermark, file, wm_cb)
-            await wm_prog.done("Watermark added!")
+            # Use the high-quality watermark function
+            file, thumb = await loop.run_in_executor(None, add_watermark_high_quality, file, wm_cb)
+            await wm_prog.done("Watermark added (near-lossless)!")
         except Exception as e:
             await wm_prog.error(f"Watermark failed:\n{e}")
             _cleanup(uid)
@@ -1402,6 +1449,7 @@ async def process_and_post(message, uid: int):
                         total=total
                     )
 
+            # Upload original file to channel (no compression)
             sent_msg = await client.send_file(
                 CHANNEL, file,
                 caption=full_caption or "✅",
@@ -1441,15 +1489,14 @@ async def process_and_post(message, uid: int):
                     )
                 except Exception:
                     try:
-                        # Fallback 2: raw send with thumbnail (fixed parameter name)
+                        # Fallback 2: raw send with thumbnail
                         with open(file, "rb") as vf:
-                            # Use thumbnail path as string or file object
                             thumb_arg = thumb if thumb and os.path.exists(thumb) else None
                             await bot_app.bot.send_video(
                                 chat_id=uid,
                                 video=vf,
                                 caption=full_caption or "✅",
-                                thumbnail=thumb_arg,  # FIXED: changed from 'thumb' to 'thumbnail'
+                                thumbnail=thumb_arg,
                                 supports_streaming=True,
                             )
                     except Exception as e:
