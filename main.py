@@ -5,9 +5,10 @@ import shutil
 import threading
 import time
 import re as _re
+import subprocess
 import warnings
 warnings.filterwarnings('ignore', message='.*per_message.*')
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder, MessageHandler, CallbackQueryHandler,
     CommandHandler, ConversationHandler, filters, ContextTypes,
@@ -16,11 +17,10 @@ from telegram.ext import (
 from downloader import download_video
 from watermark import add_watermark, get_thumbnail_only
 from progress import ProgressMessage
-from server import run_server, get_tokens
+from server import run_server, get_tokens, get_instagram_tokens
 from tiktok import get_auth_url, post_video
 from tiktok_bypass import upload_video_session, get_session as tt_get_session, login_with_cookies as tt_login
-from instagram import get_auth_url as ig_auth_url, post_video_from_file as ig_post, get_token as ig_get_token, save_token as ig_save_token
-from server import run_server, get_tokens, get_instagram_tokens
+from instagram import get_auth_url as ig_auth_url, post_video_from_file as ig_post
 from gemini import generate_full_post
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
@@ -106,11 +106,9 @@ async def guard(update: Update) -> bool:
     name  = update.effective_user.full_name or "Unknown"
     uname = update.effective_user.username or "no_username"
 
-    # Admin always allowed
     if is_admin(uid):
         return True
 
-    # Banned in DB
     if is_banned_db(uid):
         try:
             await update.effective_message.reply_text(
@@ -121,11 +119,9 @@ async def guard(update: Update) -> bool:
             pass
         return False
 
-    # Approved in DB
     if is_approved(uid):
         return True
 
-    # Pending
     if is_pending(uid):
         try:
             await update.effective_message.reply_text(
@@ -136,7 +132,6 @@ async def guard(update: Update) -> bool:
             pass
         return False
 
-    # New unknown user — show access request
     db["pending"][str(uid)] = {
         "name"    : name,
         "username": uname,
@@ -155,7 +150,6 @@ async def guard(update: Update) -> bool:
     except Exception:
         pass
 
-    # Notify admin
     try:
         from telegram import Bot as _Bot
         bot = _Bot(token=BOT_TOKEN)
@@ -197,11 +191,9 @@ def main_menu_keyboard():
     ])
 
 def main_menu_with_app_keyboard():
-    """Keyboard with WebApp button - must use ReplyKeyboardMarkup"""
-    from telegram import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo as _WAI
     return ReplyKeyboardMarkup([
         [KeyboardButton("📱 Open Dawn Mini App",
-                        web_app=_WAI(url=os.getenv("MINIAPP_URL","https://kesim542-pixel.github.io/dawn-miniapp/")))],
+                        web_app=WebAppInfo(url=os.getenv("MINIAPP_URL","https://kesim542-pixel.github.io/dawn-miniapp/")))],
     ], resize_keyboard=True, one_time_keyboard=False)
 
 def download_options_keyboard():
@@ -319,12 +311,10 @@ HELP_TEXT = (
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update): return
     text = await main_menu_text()
-    # Send reply keyboard with Mini App button first
     await update.message.reply_text(
         "📱 Tap the button below to open Dawn Mini App:",
         reply_markup=main_menu_with_app_keyboard()
     )
-    # Then send inline menu
     await update.message.reply_text(
         text, parse_mode="Markdown", reply_markup=main_menu_keyboard()
     )
@@ -334,7 +324,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_stats(update.message)
 
 async def ttcookie_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Set TikTok cookies for bypass posting: /ttcookie <cookie_string>"""
     if not await guard(update): return
     uid  = update.effective_user.id
     args = context.args
@@ -377,7 +366,6 @@ async def ttcookie_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def testai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Test Gemini API and show exact error"""
     if not await guard(update): return
     msg = await update.message.reply_text("🔄 Testing Gemini API...")
     try:
@@ -546,7 +534,6 @@ async def auth_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def do_ai_generate(message, uid: int, topic: str, platform: str = "both"):
     try:
-        # Hard 25 second timeout — won't get stuck forever
         selected = ai_model_setting.get("model", "auto")
         result = await asyncio.wait_for(
             generate_full_post(
@@ -643,7 +630,6 @@ async def show_confirm(message, uid: int):
 # ══════════════════════════════════════════
 
 async def handle_web_app_data_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle web_app_data sent from Mini App"""
     if not update.message:
         return
     if not update.message.web_app_data:
@@ -652,10 +638,8 @@ async def handle_web_app_data_check(update: Update, context: ContextTypes.DEFAUL
 
 
 async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle data sent from Mini App via sendData()"""
     if not await guard(update): return
     uid  = update.effective_user.id
-    # Acknowledge receipt immediately
     await update.message.reply_text(
         "📱 *Mini App data received!* Processing...",
         parse_mode="Markdown"
@@ -680,7 +664,6 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             user_post_data[uid]["dest"]    = "dest_" + data.get("dest", "telegram")
             user_post_data[uid]["privacy"] = data.get("privacy", "SELF_ONLY")
 
-            # Acknowledge receipt
             wm_txt   = "✅ With Watermark" if data.get("wm")=="on" else "❌ No Watermark"
             dest_map = {"telegram":"📢 Telegram","tiktok":"🎵 TikTok","both":"📢+🎵 Both"}
             dest_txt = dest_map.get(data.get("dest","telegram"), "📢 Telegram")
@@ -896,7 +879,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Admin: Approve user ────────────────────────────────────────────────
     if data.startswith("approve_") and is_admin(uid):
         target_uid  = data.split("_")[1]
         target_info = db["pending"].get(target_uid, db["approved"].get(target_uid, {}))
@@ -925,7 +907,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # ── Admin: Reject user ─────────────────────────────────────────────────
     if data.startswith("reject_") and is_admin(uid):
         target_uid  = data.split("_")[1]
         target_info = db["pending"].get(target_uid, {})
@@ -947,7 +928,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # ── Admin: Ban user ────────────────────────────────────────────────────
     if data.startswith("ban_") and is_admin(uid):
         target_uid  = data.split("_")[1]
         target_info = (db["pending"].get(target_uid)
@@ -974,7 +954,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # ── Admin: Users list ──────────────────────────────────────────────────
     if data == "admin_users" and is_admin(uid):
         if not db["approved"]:
             await query.message.edit_text(
@@ -999,7 +978,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Admin: Pending list ────────────────────────────────────────────────
     if data == "admin_pending" and is_admin(uid):
         if not db["pending"]:
             await query.message.edit_text(
@@ -1026,7 +1004,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Admin: Banned list ─────────────────────────────────────────────────
     if data == "admin_banned" and is_admin(uid):
         if not db["banned"]:
             await query.message.edit_text(
@@ -1051,7 +1028,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Admin: Revoke access ───────────────────────────────────────────────
     if data.startswith("revoke_") and is_admin(uid):
         target_uid  = data.split("_")[1]
         target_name = db["approved"].get(target_uid, {}).get("name", "User")
@@ -1074,7 +1050,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # ── Admin: Unban ───────────────────────────────────────────────────────
     if data.startswith("unban_") and is_admin(uid):
         target_uid  = data.split("_")[1]
         target_name = db["banned"].get(target_uid, {}).get("name", "User")
@@ -1316,7 +1291,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════
-#  DOWNLOAD → WATERMARK → POST
+#  THUMBNAIL GENERATOR (FIX BLACK THUMBNAIL)
+# ══════════════════════════════════════════
+
+async def generate_thumbnail(video_path: str) -> str:
+    """Generate a thumbnail from video using ffmpeg (fallback if needed)."""
+    thumb_path = "generated_thumb.jpg"
+    try:
+        # Extract frame at 1 second
+        cmd = [
+            "ffmpeg", "-i", video_path, "-ss", "00:00:01",
+            "-vframes", "1", "-q:v", "2", thumb_path, "-y"
+        ]
+        subprocess.run(cmd, check=True, capture_output=True, timeout=10)
+        if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 5000:
+            return thumb_path
+    except Exception:
+        pass
+    return None
+
+
+# ══════════════════════════════════════════
+#  DOWNLOAD → WATERMARK → POST (REFACTORED)
 # ══════════════════════════════════════════
 
 async def process_and_post(message, uid: int):
@@ -1355,7 +1351,6 @@ async def process_and_post(message, uid: int):
         await dl_prog.start()
         try:
             def dl_cb(pct, spd, dled, tot):
-                # spd comes directly from yt-dlp (bytes/sec)
                 asyncio.run_coroutine_threadsafe(
                     dl_prog.update(pct, spd, dled, tot), loop
                 )
@@ -1388,13 +1383,18 @@ async def process_and_post(message, uid: int):
         except Exception:
             thumb = None
 
-    # Step 3: Telegram
+    # --- FIX BLACK THUMBNAIL: generate if missing or invalid ---
+    if not thumb or not os.path.exists(thumb) or os.path.getsize(thumb) < 5000:
+        generated = await generate_thumbnail(file)
+        if generated:
+            thumb = generated
+
+    # Step 3: Telegram (DIRECT VIDEO FORWARDING - NO LINKS, NO DOUBLE MESSAGES)
     if dest in ("dest_telegram", "dest_both", "dest_all"):
         up_prog = ProgressMessage(message, "📤 Uploading to Channel")
         await up_prog.start()
         sent_msg = None
         try:
-            # Track upload speed with rolling window (via progress_cb bytes)
             async def upload_cb(sent, total):
                 if total:
                     await up_prog.update(
@@ -1410,16 +1410,21 @@ async def process_and_post(message, uid: int):
                 progress_callback=upload_cb,
                 supports_streaming=True
             )
-            post_link = f"https://t.me/{CHANNEL.replace('@','')}/{sent_msg.id}"
-            await up_prog.done(f"[👉 View post]({post_link})")
-
         except Exception as e:
             await up_prog.error(f"Upload failed: {e}")
+            _cleanup(uid)
+            return
 
-        # ── Deliver video to user ────────────────────────────────────────
+        # Delete progress message – we will send only the video
+        try:
+            await up_prog.message.delete()
+        except Exception:
+            pass
+
+        # ── Deliver video directly to user (no link, no button) ──
         if sent_msg:
             try:
-                # copy_message hides "Forwarded from channel" label
+                # Preferred: copy_message (no "Forwarded from" label)
                 await bot_app.bot.copy_message(
                     chat_id=uid,
                     from_chat_id=sent_msg.chat_id if hasattr(sent_msg, "chat_id")
@@ -1428,7 +1433,7 @@ async def process_and_post(message, uid: int):
                 )
             except Exception:
                 try:
-                    # Fallback: forward (shows channel name)
+                    # Fallback 1: forward (shows channel name)
                     await client.forward_messages(
                         entity=uid,
                         messages=sent_msg,
@@ -1437,16 +1442,19 @@ async def process_and_post(message, uid: int):
                     )
                 except Exception:
                     try:
-                        # Last resort: send raw file
-                        with open(file, "rb") as vf:
+                        # Fallback 2: raw send with thumbnail
+                        with open(file, "rb") as vf, open(thumb, "rb") as tf:
                             await bot_app.bot.send_video(
                                 chat_id=uid,
                                 video=vf,
-                                caption="✅ Posted!",
+                                caption=full_caption or "✅",
+                                thumb=tf,
                                 supports_streaming=True,
                             )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        await message.reply_text(f"❌ Failed to send video: {e}")
+        else:
+            await message.reply_text("❌ Failed to upload video to storage channel.")
 
     # Step 4: TikTok Bypass (session-based, no API limit)
     if dest in ("dest_tiktok_bypass",):
@@ -1501,7 +1509,6 @@ async def process_and_post(message, uid: int):
             ig_prog = ProgressMessage(message, "📸 Posting to Instagram")
             await ig_prog.start()
             try:
-                # Get public URL for video
                 server_url = os.getenv("RAILWAY_PUBLIC_DOMAIN",
                     "https://dawn-production-7c5f.up.railway.app")
                 result = await ig_post(
@@ -1518,7 +1525,7 @@ async def process_and_post(message, uid: int):
             except Exception as e:
                 await ig_prog.error(f"Instagram failed:\n{str(e)[:300]}")
 
-    # Step 5: TikTok
+    # Step 6: TikTok (API)
     if dest in ("dest_tiktok", "dest_both", "dest_all"):
         tokens = get_tokens()
         token  = tokens.get(str(uid))
@@ -1559,7 +1566,7 @@ async def process_and_post(message, uid: int):
 
 
 def _cleanup(uid: int):
-    for tmp in ["video.mp4", "output.mp4", "thumb.jpg"]:
+    for tmp in ["video.mp4", "output.mp4", "thumb.jpg", "generated_thumb.jpg"]:
         if os.path.exists(tmp): os.remove(tmp)
     user_links.pop(uid, None)
     user_videos.pop(uid, None)
@@ -1574,7 +1581,7 @@ def _cleanup(uid: int):
 async def main():
     global bot_app
 
-    # Start web server FIRST
+    # Start web server
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
     time.sleep(2)
@@ -1605,17 +1612,15 @@ async def main():
     app.add_handler(auth_conv)
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, receive_video))
-    # IMPORTANT: web_app_data is a separate filter - not TEXT
     app.add_handler(MessageHandler(filters.StatusUpdate.ALL, handle_web_app_data_check))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_message))
 
     await app.initialize()
-    # Kill any existing connections first
     try:
         await app.bot.delete_webhook(drop_pending_updates=True)
     except Exception:
         pass
-    await asyncio.sleep(3)  # Wait for old instance to die
+    await asyncio.sleep(3)
     await app.start()
     await app.updater.start_polling(
         drop_pending_updates=True,
